@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Playlist Exporter</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="brand">
+        <span class="brand-mark">Playlist Exporter</span>
+        <span class="brand-sub">Music.app → Memory Card</span>
+      </div>
+      <div class="nas-status" id="nasStatus">
+        <span class="dot"></span>
+        <span id="nasStatusText">checking library…</span>
+      </div>
+    </div>
+
+    <div class="error-banner" id="errorBanner" style="display:none;"></div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <p class="sidebar-label">Playlists</p>
+          <input class="search" type="text" id="searchInput" placeholder="Filter playlists…" />
+          <select class="sort-select" id="sortSelect">
+            <option value="name">Sort: Name (A–Z)</option>
+            <option value="newest">Sort: Newest first</option>
+            <option value="oldest">Sort: Oldest first</option>
+          </select>
+        </div>
+        <div class="sidebar-actions">
+          <button class="link-btn" id="selectAllBtn">Select all</button>
+          <span class="sep">·</span>
+          <button class="link-btn" id="clearSelectionBtn">Clear</button>
+          <span class="selected-count" id="selectedCount">0 selected</span>
+        </div>
+        <div class="prefetch-status" id="prefetchStatus" style="display:none;"></div>
+        <nav class="playlist-list" id="playlistList"></nav>
+      </aside>
+
+      <main class="main">
+        <div class="main-inner">
+          <div class="dest-row">
+            <span class="dest-label">Export to</span>
+            <span class="dest-path placeholder" id="destPath">Choose a destination…</span>
+            <span class="dest-free" id="destFree"></span>
+            <button class="btn" id="changeDestBtn">Choose Folder…</button>
+          </div>
+
+          <div class="stat-strip" id="statStrip"></div>
+
+          <div class="table-card">
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="col-pos">#</th>
+                    <th>Track</th>
+                    <th>Album</th>
+                    <th>Format</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="trackBody">
+                  <tr><td colspan="5" class="empty-state">Select one or more playlists on the left to preview what will be exported.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="action-bar">
+            <div class="action-copy">
+              <span class="action-title" id="actionTitle">Export Playlists</span>
+              <span class="action-sub" id="actionSub">No playlists selected</span>
+            </div>
+            <button class="btn-primary" id="exportBtn" disabled>Export Playlists</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="progress-overlay" id="progressOverlay">
+    <div class="progress-card">
+      <span class="progress-title" id="progressTitle">Exporting…</span>
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-status-row">
+        <span id="progressStatus">Copying file 0 of 0 <span class="progress-pct" id="progressPct">0%</span></span>
+        <span class="progress-eta" id="progressEta">ETA —</span>
+      </div>
+      <div class="progress-log" id="progressLog"></div>
+      <div class="progress-summary" id="progressSummary" style="display:none;"></div>
+      <div class="progress-actions">
+        <button class="btn" id="closeProgressBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
