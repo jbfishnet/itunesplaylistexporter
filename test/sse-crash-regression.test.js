@@ -15,6 +15,7 @@ const path = require("node:path");
 
 process.env.PORT = process.env.PORT || "4199";
 process.env.PLE_NO_OPEN = "1"; // don't pop open a browser tab for a test run
+process.env.PLE_NO_LIBRARY_SCAN = "1"; // this test only needs the export/SSE routes
 const server = require("../server");
 
 const exporter = require("../src/exporter");

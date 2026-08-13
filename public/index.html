@@ -19,68 +19,274 @@
       </div>
     </div>
 
+    <div class="tabbar" id="tabbar">
+      <button class="tab-btn active" data-tab="playlists">Playlists</button>
+      <button class="tab-btn" data-tab="search">Search</button>
+      <button class="tab-btn" data-tab="browse">Library Index</button>
+      <button class="tab-btn" data-tab="queue">Queue</button>
+      <button class="tab-btn" data-tab="notfound">Not Found</button>
+      <button class="tab-btn" data-tab="duplicates">Duplicates</button>
+    </div>
+
     <div class="error-banner" id="errorBanner" style="display:none;"></div>
 
-    <div class="layout">
-      <aside class="sidebar">
-        <div class="sidebar-head">
-          <p class="sidebar-label">Playlists</p>
-          <input class="search" type="text" id="searchInput" placeholder="Filter playlists…" />
-          <select class="sort-select" id="sortSelect">
-            <option value="name">Sort: Name (A–Z)</option>
-            <option value="newest">Sort: Newest first</option>
-            <option value="oldest">Sort: Oldest first</option>
+    <div id="playlistsView" class="tab-view active">
+      <div class="layout">
+        <aside class="sidebar">
+          <div class="sidebar-head">
+            <p class="sidebar-label">Playlists</p>
+            <input class="search" type="text" id="searchInput" placeholder="Filter playlists…" />
+            <select class="sort-select" id="sortSelect">
+              <option value="name">Sort: Name (A–Z)</option>
+              <option value="newest">Sort: Newest first</option>
+              <option value="oldest">Sort: Oldest first</option>
+            </select>
+          </div>
+          <div class="sidebar-actions">
+            <button class="link-btn" id="selectAllBtn">Select all</button>
+            <span class="sep">·</span>
+            <button class="link-btn" id="clearSelectionBtn">Clear</button>
+            <span class="selected-count" id="selectedCount">0 selected</span>
+          </div>
+          <div class="prefetch-status" id="prefetchStatus" style="display:none;"></div>
+          <nav class="playlist-list" id="playlistList"></nav>
+        </aside>
+
+        <main class="main">
+          <div class="main-inner">
+            <div class="dest-row">
+              <span class="dest-label">Export to</span>
+              <span class="dest-path placeholder" id="destPath">Choose a destination…</span>
+              <span class="dest-free" id="destFree"></span>
+              <button class="btn" id="changeDestBtn">Choose Folder…</button>
+            </div>
+
+            <div class="stat-strip" id="statStrip"></div>
+
+            <div class="table-card">
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th class="col-pos">#</th>
+                      <th>Track</th>
+                      <th>Album</th>
+                      <th>Format</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="trackBody">
+                    <tr><td colspan="5" class="empty-state">Select one or more playlists on the left to preview what will be exported.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="action-bar">
+              <div class="action-copy">
+                <span class="action-title" id="actionTitle">Export Playlists</span>
+                <span class="action-sub" id="actionSub">No playlists selected</span>
+              </div>
+              <button class="btn-primary" id="exportBtn" disabled>Export Playlists</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <div id="searchView" class="tab-view">
+      <div class="main-inner search-inner">
+        <div class="folders-card">
+          <div class="folders-card-head">Library Folders</div>
+          <div id="foldersList"></div>
+          <div class="folder-add-row">
+            <button class="btn" id="folderAddBtn">Add Folder…</button>
+          </div>
+        </div>
+
+        <div class="library-status-row">
+          <div class="stat-strip" id="libraryStatStrip"></div>
+          <button class="btn" id="rescanNowBtn">Rescan now</button>
+        </div>
+        <p class="library-meta" id="libraryMeta">Loading library status…</p>
+
+        <input class="search library-search-input" type="text" id="librarySearchInput" placeholder="Search your music library…" />
+
+        <div class="table-card">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Artist</th>
+                  <th>Album</th>
+                  <th>Genre</th>
+                  <th>Format</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="libraryResultsBody">
+                <tr><td colspan="6" class="empty-state">Type to search your indexed music library.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="browseView" class="tab-view">
+      <div class="main-inner search-inner">
+        <div class="library-status-row">
+          <p class="library-meta" id="browseMeta">Loading…</p>
+          <button class="link-btn" id="browseClearFiltersBtn">Clear filters</button>
+        </div>
+
+        <div class="browse-filter-bar">
+          <input class="search browse-filter" type="text" id="browseFilterTitle" placeholder="Title contains…" />
+          <input class="search browse-filter" type="text" id="browseFilterArtist" placeholder="Artist contains…" />
+          <input class="search browse-filter" type="text" id="browseFilterAlbum" placeholder="Album contains…" />
+          <select class="sort-select browse-filter" id="browseFilterGenre">
+            <option value="">Genre: All</option>
+          </select>
+          <select class="sort-select browse-filter" id="browseFilterYear">
+            <option value="">Year: All</option>
+          </select>
+          <select class="sort-select browse-filter" id="browseFilterFormat">
+            <option value="">Format: All</option>
+          </select>
+          <select class="sort-select browse-filter" id="browseFilterStatus">
+            <option value="">Status: All</option>
+          </select>
+          <select class="sort-select browse-filter" id="browseFilterProtected">
+            <option value="">Protected: All</option>
+            <option value="yes">Protected only</option>
+            <option value="no">Not protected</option>
           </select>
         </div>
-        <div class="sidebar-actions">
-          <button class="link-btn" id="selectAllBtn">Select all</button>
-          <span class="sep">·</span>
-          <button class="link-btn" id="clearSelectionBtn">Clear</button>
-          <span class="selected-count" id="selectedCount">0 selected</span>
-        </div>
-        <div class="prefetch-status" id="prefetchStatus" style="display:none;"></div>
-        <nav class="playlist-list" id="playlistList"></nav>
-      </aside>
 
-      <main class="main">
-        <div class="main-inner">
-          <div class="dest-row">
-            <span class="dest-label">Export to</span>
-            <span class="dest-path placeholder" id="destPath">Choose a destination…</span>
-            <span class="dest-free" id="destFree"></span>
-            <button class="btn" id="changeDestBtn">Choose Folder…</button>
-          </div>
-
-          <div class="stat-strip" id="statStrip"></div>
-
-          <div class="table-card">
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th class="col-pos">#</th>
-                    <th>Track</th>
-                    <th>Album</th>
-                    <th>Format</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody id="trackBody">
-                  <tr><td colspan="5" class="empty-state">Select one or more playlists on the left to preview what will be exported.</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="action-bar">
-            <div class="action-copy">
-              <span class="action-title" id="actionTitle">Export Playlists</span>
-              <span class="action-sub" id="actionSub">No playlists selected</span>
-            </div>
-            <button class="btn-primary" id="exportBtn" disabled>Export Playlists</button>
+        <div class="table-card">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th data-sort="title">Title</th>
+                  <th data-sort="artist">Artist</th>
+                  <th data-sort="album">Album</th>
+                  <th data-sort="genre">Genre</th>
+                  <th data-sort="year">Year</th>
+                  <th data-sort="extension">Format</th>
+                  <th data-sort="enrichment_status">Status</th>
+                </tr>
+              </thead>
+              <tbody id="browseResultsBody">
+                <tr><td colspan="7" class="empty-state">Loading your indexed library…</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
-      </main>
+
+        <div class="browse-pagination">
+          <button class="link-btn" id="browsePrevBtn">← Prev</button>
+          <span id="browsePageInfo"></span>
+          <button class="link-btn" id="browseNextBtn">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="queueView" class="tab-view">
+      <div class="main-inner search-inner">
+        <div class="stat-strip" id="queueStatStrip"></div>
+        <p class="library-meta" id="queueMeta">Loading…</p>
+
+        <div class="table-card">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th class="col-pos">#</th>
+                  <th>Title</th>
+                  <th>Artist</th>
+                  <th>Album</th>
+                  <th>Format</th>
+                </tr>
+              </thead>
+              <tbody id="queueResultsBody">
+                <tr><td colspan="5" class="empty-state">Loading the enrichment queue…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="notfoundView" class="tab-view">
+      <div class="main-inner search-inner">
+        <div class="library-status-row">
+          <p class="library-meta" id="notfoundMeta">Loading…</p>
+          <button class="btn" id="notfoundRetryAllBtn">Retry all with improved matching</button>
+        </div>
+
+        <div class="browse-filter-bar">
+          <input class="search browse-filter" type="text" id="notfoundFilterTitle" placeholder="Title contains…" />
+        </div>
+
+        <div class="table-card">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Artist</th>
+                  <th>Album</th>
+                  <th>Genre</th>
+                  <th>Format</th>
+                </tr>
+              </thead>
+              <tbody id="notfoundResultsBody">
+                <tr><td colspan="5" class="empty-state">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="browse-pagination">
+          <button class="link-btn" id="notfoundPrevBtn">← Prev</button>
+          <span id="notfoundPageInfo"></span>
+          <button class="link-btn" id="notfoundNextBtn">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="duplicatesView" class="tab-view">
+      <div class="main-inner">
+        <div class="dup-section-head">Exact Duplicates <span class="dup-section-sub">byte-identical files — safe to delete</span></div>
+        <div class="dup-summary">
+          <div class="stat-tile" style="flex:none;padding:10px 14px"><span class="stat-value" id="dupGroupCount">—</span><span class="stat-caption">Duplicate groups</span></div>
+          <div class="stat-tile danger" style="flex:none;padding:10px 14px"><span class="stat-value" id="dupExtraCount">—</span><span class="stat-caption">Extra copies</span></div>
+          <div class="stat-tile" style="flex:none;padding:10px 14px"><span class="stat-value" id="dupReclaimable">—</span><span class="stat-caption">Reclaimable</span></div>
+          <button class="btn-danger" id="dupDeleteAllBtn">Delete All Duplicates</button>
+          <span class="library-meta" id="dupMeta" style="margin-left:auto">Loading…</span>
+        </div>
+
+        <div id="dupGroups" style="display:flex;flex-direction:column;gap:14px;"></div>
+
+        <div class="browse-pagination">
+          <button class="link-btn" id="dupPrevBtn">← Prev</button>
+          <span id="dupPageInfo"></span>
+          <button class="link-btn" id="dupNextBtn">Next →</button>
+        </div>
+
+        <div class="dup-section-head">Similar Titles <span class="dup-section-sub">same title, something's different — could be a real duplicate or just a different version; nothing here can be deleted directly</span></div>
+        <p class="library-meta" id="similarMeta">Loading…</p>
+
+        <div id="similarGroups" style="display:flex;flex-direction:column;gap:14px;"></div>
+
+        <div class="browse-pagination">
+          <button class="link-btn" id="similarPrevBtn">← Prev</button>
+          <span id="similarPageInfo"></span>
+          <button class="link-btn" id="similarNextBtn">Next →</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -100,6 +306,12 @@
     </div>
   </div>
 
+  <script src="audioPlayer.js"></script>
   <script src="app.js"></script>
+  <script src="librarySearch.js"></script>
+  <script src="libraryBrowse.js"></script>
+  <script src="libraryQueue.js"></script>
+  <script src="libraryNotFound.js"></script>
+  <script src="libraryDuplicates.js"></script>
 </body>
 </html>

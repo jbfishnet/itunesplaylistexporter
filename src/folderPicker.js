@@ -44,4 +44,19 @@ function freeSpaceLabel(targetPath) {
   });
 }
 
-module.exports = { chooseFolder, freeSpaceLabel };
+/** Opens a Finder window with the given file selected — "Show in Finder,"
+ * not "open the file": `open -R` reveals a path without launching whatever
+ * app is registered to handle it. */
+function revealInFinder(filePath) {
+  return new Promise((resolve, reject) => {
+    execFile("open", ["-R", filePath], (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(stderr?.trim() || err.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+module.exports = { chooseFolder, freeSpaceLabel, revealInFinder };

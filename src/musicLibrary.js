@@ -17,6 +17,13 @@ function isTransientAppleScriptError(message) {
   return TRANSIENT_ERROR_CODES.some((code) => message.includes(`(${code})`));
 }
 
+// Music.app's scripting bridge can be very slow to enumerate playlists when
+// it's doing iCloud Music Library / Apple Music matching in the background —
+// observed taking well over a minute on a ~100-playlist library. A short
+// timeout here misreports as "Automation permission denied" (see below), so
+// it's set generously rather than tightened for snappier failure.
+const APPLESCRIPT_TIMEOUT_MS = 5 * 60 * 1000;
+
 function runAppleScriptOnce(script) {
   return new Promise((resolve, reject) => {
     const tmpFile = path.join(
@@ -27,10 +34,19 @@ function runAppleScriptOnce(script) {
     execFile(
       "osascript",
       [tmpFile],
-      { maxBuffer: 1024 * 1024 * 64, timeout: 30_000 },
+      { maxBuffer: 1024 * 1024 * 64, timeout: APPLESCRIPT_TIMEOUT_MS },
       (err, stdout, stderr) => {
         fs.unlink(tmpFile, () => {});
         if (err) {
+          if (err.killed && err.signal === "SIGTERM") {
+            reject(
+              new Error(
+                `Music.app didn't respond within ${APPLESCRIPT_TIMEOUT_MS / 1000}s ` +
+                  "(it may be busy syncing with iCloud Music Library) — try again."
+              )
+            );
+            return;
+          }
           reject(new Error(stderr?.trim() || err.message));
           return;
         }
@@ -53,11 +69,29 @@ async function runAppleScript(script, attempt = 1) {
   }
 }
 
+// Multiple open tabs/windows (e.g. the native app plus a browser tab, or
+// several stale tabs left open) each poll independently and can easily land
+// on Music.app at the same moment — observed spawning 4 concurrent osascript
+// processes in practice, which appears to be what pushes Music.app's Apple
+// Event handling into the timeouts this whole module works around. Sharing
+// one in-flight call across concurrent callers (keyed by playlist id for
+// track fetches) removes that pile-up regardless of how many clients are open.
+let listPlaylistsInFlight = null;
+const trackFetchesInFlight = new Map();
+
 /**
  * Lists user-created playlists (regular + smart), excluding the built-in
  * Library/Music sources and folder playlists (which don't hold tracks directly).
  */
 async function listPlaylists() {
+  if (listPlaylistsInFlight) return listPlaylistsInFlight;
+  listPlaylistsInFlight = listPlaylistsUncached().finally(() => {
+    listPlaylistsInFlight = null;
+  });
+  return listPlaylistsInFlight;
+}
+
+async function listPlaylistsUncached() {
   const script = `
 tell application "Music"
   set output to ""
@@ -84,6 +118,16 @@ end tell
  * needed to decide whether it can be exported (location on disk + kind).
  */
 async function getPlaylistTracks(playlistId) {
+  const key = String(playlistId);
+  if (trackFetchesInFlight.has(key)) return trackFetchesInFlight.get(key);
+  const promise = getPlaylistTracksUncached(playlistId).finally(() => {
+    trackFetchesInFlight.delete(key);
+  });
+  trackFetchesInFlight.set(key, promise);
+  return promise;
+}
+
+async function getPlaylistTracksUncached(playlistId) {
   const numericId = parseInt(playlistId, 10);
   if (!Number.isFinite(numericId)) {
     throw new Error(`Invalid playlist id: ${playlistId}`);

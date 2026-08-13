@@ -1,18 +1,23 @@
 (() => {
   const LARGE_PLAYLIST_TRACK_LIMIT = 400; // don't auto-scan huge playlists (e.g. the full library)
   const PREFETCH_CONCURRENCY = 2; // gentle on Music.app, which may be actively playing/in use
+  const CACHE_KEY = "ple.cache.v1";
+  const BACKGROUND_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 
   let playlists = [];               // [{id, name, trackCount}]
   const selectedIds = new Set();
   const trackCache = new Map();     // id -> tracks[] (classified)
+  const trackSyncedAt = new Map();  // id -> ms timestamp of that playlist's last successful sync
   const errorCache = new Map();     // id -> error message string
-  const fetching = new Set();       // ids currently being fetched
+  const fetching = new Set();       // ids currently being fetched (foreground — shows "checking…")
+  const backgroundRefreshing = new Set(); // ids currently being silently refreshed — never shown as "checking…"
   let searchQuery = "";
   let sortMode = "name";            // "name" | "newest" | "oldest"
   let destination = null;
   let prefetchDone = 0;
   let prefetchTotal = 0;
   let prefetchRunning = false;
+  let playlistsSyncedAt = null;     // ms timestamp of the last successful full playlist-list sync
 
   const el = (id) => document.getElementById(id);
   const listEl = el("playlistList");
@@ -38,21 +43,133 @@
     nasStatusText.textContent = "not connected";
   }
 
-  async function loadPlaylists() {
+  /** Persisted so the app has something to show immediately on load without
+   * waiting on Music.app — see hydrateFromCache()/refreshPlaylists() below. */
+  function loadCache() {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveCache() {
+    try {
+      const tracks = {};
+      trackCache.forEach((tracksForId, id) => {
+        tracks[id] = { tracks: tracksForId, syncedAt: trackSyncedAt.get(id) || null };
+      });
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ playlists, playlistsSyncedAt, tracks }));
+    } catch {
+      // Storage disabled/full — caching is a nice-to-have, never block the app on it.
+    }
+  }
+
+  /** Loads whatever was cached from a previous run, if any. Returns whether
+   * there was anything to show. */
+  function hydrateFromCache() {
+    const cache = loadCache();
+    if (!cache || !Array.isArray(cache.playlists) || cache.playlists.length === 0) return false;
+    playlists = cache.playlists;
+    playlistsSyncedAt = cache.playlistsSyncedAt || null;
+    Object.entries(cache.tracks || {}).forEach(([id, entry]) => {
+      trackCache.set(id, entry.tracks);
+      trackSyncedAt.set(id, entry.syncedAt || null);
+    });
+    return true;
+  }
+
+  function formatRelativeTime(ms) {
+    if (!ms) return null;
+    const deltaSec = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (deltaSec < 10) return "just now";
+    if (deltaSec < 60) return `${deltaSec}s ago`;
+    const deltaMin = Math.round(deltaSec / 60);
+    if (deltaMin < 60) return `${deltaMin}m ago`;
+    const deltaHour = Math.round(deltaMin / 60);
+    if (deltaHour < 24) return `${deltaHour}h ago`;
+    const deltaDay = Math.round(deltaHour / 24);
+    return `${deltaDay}d ago`;
+  }
+
+  /** Fetches the current playlist list from Music.app and updates the cache.
+   * With `silent`, a failure never blanks out already-showing data — the
+   * whole point of caching is that stale-but-available beats blank. */
+  async function refreshPlaylists({ silent = false } = {}) {
     try {
       const res = await fetch("/api/playlists");
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load playlists");
+      if (!res.ok) {
+        const message = data.error || "Failed to load playlists";
+        throw new Error(data.hint ? `${message}\n${data.hint}` : message);
+      }
       playlists = data;
-      nasStatusText.textContent = `${playlists.length} playlist${playlists.length === 1 ? "" : "s"} found`;
+      playlistsSyncedAt = Date.now();
+      saveCache();
+      nasStatus.querySelector(".dot").classList.remove("warn");
+      nasStatusText.textContent =
+        `${playlists.length} playlist${playlists.length === 1 ? "" : "s"} found` +
+        ` · synced ${formatRelativeTime(playlistsSyncedAt)}`;
+      errorBanner.style.display = "none";
       renderSidebar();
       renderMain();
       backgroundPrefetch();
-      scheduleAutoHeal();
     } catch (err) {
-      showError("Couldn't read your Music.app playlists.",
-        "Make sure Music.app is running, then re-run this app — macOS will ask you to grant Automation permission (System Settings > Privacy & Security > Automation).");
+      if (playlists.length === 0) {
+        showError("Couldn't read your Music.app playlists.", err.message);
+      } else {
+        // Already have something on screen (from cache or an earlier sync) —
+        // note the failed refresh quietly rather than hiding good data.
+        nasStatus.querySelector(".dot").classList.add("warn");
+        nasStatusText.textContent =
+          `${playlists.length} playlist${playlists.length === 1 ? "" : "s"}` +
+          ` · last synced ${formatRelativeTime(playlistsSyncedAt) || "never"} (refresh failed)`;
+      }
     }
+  }
+
+  /** Re-fetches a playlist's tracks in the background without ever clearing
+   * what's already cached — a failed silent refresh just leaves the old,
+   * still-valid data and timestamp in place. */
+  async function refreshTracksFor(id) {
+    if (fetching.has(id) || backgroundRefreshing.has(id)) return;
+    backgroundRefreshing.add(id);
+    try {
+      const data = await fetchTracksOnce(id);
+      trackCache.set(id, data);
+      trackSyncedAt.set(id, Date.now());
+      errorCache.delete(id);
+      saveCache();
+      renderSidebar();
+      renderMain();
+    } catch {
+      // keep last-known-good data
+    } finally {
+      backgroundRefreshing.delete(id);
+    }
+  }
+
+  async function backgroundSync() {
+    await refreshPlaylists({ silent: true });
+    const candidates = playlists.filter((p) => p.trackCount <= LARGE_PLAYLIST_TRACK_LIMIT);
+    let cursor = 0;
+    async function worker() {
+      while (cursor < candidates.length) {
+        const p = candidates[cursor];
+        cursor += 1;
+        await refreshTracksFor(p.id);
+      }
+    }
+    await Promise.all(Array.from({ length: PREFETCH_CONCURRENCY }, worker));
+  }
+
+  function scheduleBackgroundSync() {
+    setInterval(backgroundSync, BACKGROUND_SYNC_INTERVAL_MS);
+    // Keeps "synced Xm ago" labels ticking even when nothing else changes.
+    setInterval(() => {
+      renderSidebar();
+    }, 60_000);
   }
 
   function counts(tracks) {
@@ -93,9 +210,11 @@
       try {
         const data = await fetchTracksOnce(id);
         trackCache.set(id, data);
+        trackSyncedAt.set(id, Date.now());
         errorCache.delete(id);
         autoHealAttempts.delete(id);
         lastError = null;
+        saveCache();
         break;
       } catch (err) {
         lastError = err;
@@ -197,6 +316,43 @@
     return String(str).replace(/"/g, "&quot;");
   }
 
+  /** A play button next to a title, wired up to the shared mini-player
+   * (public/audioPlayer.js) — disabled with no url when there's nothing
+   * playable (protected/missing tracks). */
+  function playButtonHtml(url, label) {
+    if (!url) return `<button type="button" class="play-btn" disabled title="Not available to preview">▶</button>`;
+    return `<button type="button" class="play-btn" data-play-url="${escapeAttr(url)}" data-play-label="${escapeAttr(label)}" title="Play">▶</button>`;
+  }
+
+  function bindPlayButtons(container) {
+    container.querySelectorAll(".play-btn[data-play-url]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        window.PlaylistExporterAudio.toggle(btn.dataset.playUrl, btn.dataset.playLabel);
+      });
+    });
+    window.PlaylistExporterAudio.sync();
+  }
+
+  /** "Show in Finder" next to the play button — available whenever a track
+   * has a location on disk at all, even one the play button can't preview
+   * (e.g. protected tracks still have a real file worth revealing). */
+  function revealButtonHtml(location) {
+    if (!location) return `<button type="button" class="reveal-btn" disabled title="Not available">📂</button>`;
+    return `<button type="button" class="reveal-btn" data-reveal-path="${escapeAttr(location)}" title="Show in Finder">📂</button>`;
+  }
+
+  function bindRevealButtons(container) {
+    container.querySelectorAll(".reveal-btn[data-reveal-path]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        fetch("/api/reveal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: btn.dataset.revealPath }),
+        }).catch(() => {});
+      });
+    });
+  }
+
   function buildPlaylistItem(p) {
     const checked = selectedIds.has(p.id);
     const item = document.createElement("label");
@@ -214,6 +370,11 @@
       if (c.protectedCount) flags.push(`<span class="meta-flag danger">${c.protectedCount} protected</span>`);
       if (c.missing) flags.push(`<span class="meta-flag">${c.missing} missing</span>`);
       metaExtra = flags.length ? " · " + flags.join(" · ") : "";
+    }
+
+    const syncedAt = trackSyncedAt.get(p.id);
+    if (!fetching.has(p.id) && syncedAt) {
+      metaExtra += ` · <span class="meta-flag sync-time" title="${escapeAttr(new Date(syncedAt).toLocaleString())}">synced ${formatRelativeTime(syncedAt)}</span>`;
     }
 
     item.innerHTML = `
@@ -346,8 +507,14 @@
           <tr class="${t.status !== "ready" ? "status-" + t.status : ""}">
             <td class="col-pos">${String(t.position).padStart(2, "0")}</td>
             <td>
-              <div class="track-title">${t.title || "(untitled)"}</div>
-              <div class="track-sub">${t.artist || ""}${t.reason ? ` · <span class="reason">${t.reason}</span>` : ""}</div>
+              <div class="title-cell">
+                ${playButtonHtml(t.status === "ready" ? `/api/audio?path=${encodeURIComponent(t.location)}` : null, t.title || t.artist || "Track")}
+                ${revealButtonHtml(t.location)}
+                <span>
+                  <div class="track-title">${t.title || "(untitled)"}</div>
+                  <div class="track-sub">${t.artist || ""}${t.reason ? ` · <span class="reason">${t.reason}</span>` : ""}</div>
+                </span>
+              </div>
             </td>
             <td>${t.album || ""}</td>
             <td class="col-format">${t.extension ? "." + t.extension : "—"}</td>
@@ -362,6 +529,8 @@
     trackBodyEl.querySelectorAll("[data-retry-main]").forEach((btn) => {
       btn.addEventListener("click", () => retryFetch(btn.dataset.retryMain));
     });
+    bindPlayButtons(trackBodyEl);
+    bindRevealButtons(trackBodyEl);
 
     const settled = selected.length - loaded.length - errored.length === 0;
     const stillLoading = !settled;
@@ -548,5 +717,19 @@
     }
   });
 
-  loadPlaylists();
+  function init() {
+    const hadCache = hydrateFromCache();
+    if (hadCache) {
+      nasStatusText.textContent =
+        `${playlists.length} playlist${playlists.length === 1 ? "" : "s"} found` +
+        ` · synced ${formatRelativeTime(playlistsSyncedAt) || "a while ago"} (cached)`;
+      renderSidebar();
+      renderMain();
+    }
+    refreshPlaylists({ silent: hadCache });
+    scheduleAutoHeal();
+    scheduleBackgroundSync();
+  }
+
+  init();
 })();
