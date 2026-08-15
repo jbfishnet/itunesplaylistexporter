@@ -11,6 +11,11 @@ REPO_ROOT="$(cd .. && pwd)"
 
 APP_NAME="Playlist Exporter"
 BUNDLE="dist/$APP_NAME.app"
+# package.json is the single source of truth for the app's version — read
+# here (for the bundle's Info.plist, so Get Info/the About panel show it)
+# and separately by server.js (for the in-app UI) and ci.yml (for the built
+# artifact's name), so it's never hand-duplicated anywhere.
+VERSION="$(node -p "require('$REPO_ROOT/package.json').version")"
 
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
@@ -33,7 +38,7 @@ cp -R "$REPO_ROOT/public" "$APP_RES/public"
 echo "Compiling..."
 swiftc main.swift -o "$BUNDLE/Contents/MacOS/PlaylistExporter" -framework Cocoa -framework WebKit
 
-cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
+cat > "$BUNDLE/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -41,8 +46,8 @@ cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
   <key>CFBundleName</key><string>Playlist Exporter</string>
   <key>CFBundleDisplayName</key><string>Playlist Exporter</string>
   <key>CFBundleIdentifier</key><string>com.janboike.playlistexporter</string>
-  <key>CFBundleVersion</key><string>1.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>PlaylistExporter</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -56,4 +61,4 @@ PLIST
 echo "Signing (ad-hoc, local use only)..."
 codesign --force --deep --sign - "$BUNDLE"
 
-echo "Built: $(cd "$(dirname "$BUNDLE")" && pwd)/$APP_NAME.app"
+echo "Built: $(cd "$(dirname "$BUNDLE")" && pwd)/$APP_NAME.app (v$VERSION)"

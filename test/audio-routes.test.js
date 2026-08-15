@@ -37,6 +37,13 @@ test.after(() => {
   fs.rmSync(libraryRoot, { recursive: true, force: true });
 });
 
+test("GET /api/app-info reports the version from package.json, the single source of truth", async () => {
+  const res = await fetch(`${BASE_URL}/api/app-info`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.version, require("../package.json").version);
+});
+
 test("GET /api/audio serves a real audio file by absolute path", async () => {
   const res = await fetch(`${BASE_URL}/api/audio?path=${encodeURIComponent(path.join(libraryRoot, "tagged.mp3"))}`);
   assert.equal(res.status, 200);

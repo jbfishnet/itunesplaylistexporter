@@ -44,6 +44,12 @@ const { createDuplicateFinder } = require("./src/duplicateFinder");
 const LIBRARY_ROOT = process.env.PLE_LIBRARY_ROOT || "/Volumes/jb/iTunes4TB/iTunes Media/Music";
 const LIBRARY_DB_PATH = process.env.PLE_LIBRARY_DB || path.join(__dirname, "data", "library.sqlite3");
 
+// The single source of truth for the app's version — package.json, not
+// duplicated anywhere else. macapp/build.sh reads it into the native app's
+// Info.plist (so Get Info / the About panel show it too), and the CI
+// workflow reads it into the built artifact's name — see .github/workflows/ci.yml.
+const APP_VERSION = require("./package.json").version;
+
 // Last-resort safety net: this is a local utility app meant to run
 // unattended through a whole export, so one overlooked edge case (a broken
 // pipe, a stray rejection) should never take the entire process down. Log it
@@ -86,6 +92,10 @@ function classifiedTracks(rawTracks) {
 function isAutomationPermissionError(message) {
   return message.includes("-1743") || /not authorized/i.test(message);
 }
+
+app.get("/api/app-info", (req, res) => {
+  res.json({ version: APP_VERSION });
+});
 
 app.get("/api/playlists", async (req, res) => {
   try {

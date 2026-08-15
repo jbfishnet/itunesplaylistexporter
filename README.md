@@ -183,6 +183,27 @@ Built on the same index as the Search tab, this tab has two sections:
 Both sections delete the file from disk permanently (not to the Trash) and
 remove it from the index — this can't be undone.
 
+## Versioning
+
+`package.json`'s `version` field is the single source of truth — nowhere
+else hard-codes a version number. To cut a new version, bump it there (plain
+[semver](https://semver.org/), `MAJOR.MINOR.PATCH`) in the same commit/PR as
+the change it belongs to; everything else picks it up automatically:
+
+- The web UI shows it next to the app name (top-left), fetched live from
+  `GET /api/app-info`.
+- `macapp/build.sh` reads it into the native app's `Info.plist`
+  (`CFBundleVersion`/`CFBundleShortVersionString`), so **About Playlist
+  Exporter** and Finder's **Get Info** show it too — rebuild with
+  `./build.sh` after bumping to pick up the new number.
+- `.github/workflows/ci.yml` reads it into the uploaded build artifact's
+  name (`Playlist Exporter-vX.Y.Z`), so old and new builds in the Actions
+  run history are distinguishable at a glance.
+
+There's no enforced bump-on-every-PR check — for a single-developer local
+tool that's more process than it's worth — so treat it as "bump when the
+change is worth a new number," not every commit.
+
 ## Notes
 
 - Destination filenames are sanitized for exFAT/FAT32 (the common formats for
