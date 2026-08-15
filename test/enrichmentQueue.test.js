@@ -328,6 +328,24 @@ test("retryFailedWrites re-reads the file fresh and succeeds once the file is ac
   assert.equal(onDisk.common.artist, "Avril Lavigne");
 });
 
+test("start() automatically retries a failed write on its own schedule, without needing the manual endpoint", async (t) => {
+  const db = freshDb(t);
+  const filePath = tempCopy(t, "untagged.mp3");
+  const id = db.upsertFile({ path: filePath, size: 1, mtimeMs: 1, extension: "mp3", enrichmentStatus: "pending", scanId: 1 });
+  db.markEnriched(id, { title: "Complicated", artist: "Avril Lavigne", album: "Let Go", genre: "Pop", year: 2002 });
+  db.setTagWriteStatus(id, "failed");
+
+  // A short interval so the test doesn't have to wait long — production
+  // uses DEFAULT_RETRY_INTERVAL_MS (5 min); only the cadence differs here.
+  const queue = createEnrichmentQueue({ db, fetchFn: async () => fakeItunesResponse([]), intervalMs: 100000, retryIntervalMs: 20 });
+  t.after(() => queue.stop());
+  queue.start();
+
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(db.getFileByPath(filePath).tag_write_status, "written");
+});
+
 test("retryFailedWrites leaves a vanished file as still-failed rather than throwing", async (t) => {
   const db = freshDb(t);
   const id = db.upsertFile({

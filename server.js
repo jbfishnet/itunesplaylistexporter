@@ -518,6 +518,7 @@ app.get("/api/library/status", (req, res) => {
     enrichmentLastError: enrichState.lastError,
     tagWriteCounts: stats.tagWriteCounts,
     tagWriteFailures: enrichState.tagWriteFailures,
+    tagWriteRetryIntervalMs: enrichState.retryIntervalMs,
     duplicatesHashed: duplicateFinder?.getState().hashed || 0,
   });
 });
@@ -531,8 +532,10 @@ app.post("/api/library/rescan", (req, res) => {
 // previously failed (ffmpeg missing, a permissions error, ...) — the DB
 // already has the right metadata from the original lookup (see
 // enrichmentQueue.js), so this only retries the local file write, never
-// another API call. User-triggered rather than automatic, same reasoning as
-// requeue-not-found below.
+// another API call. This also happens automatically every few minutes (see
+// enrichmentQueue.js's retryIntervalMs) — this route exists for an
+// immediate on-demand retry (e.g. right after installing ffmpeg) instead of
+// waiting for the next scheduled pass.
 app.post("/api/library/retry-tag-writes", async (req, res) => {
   if (!libraryDb || !enrichmentQueue) return res.status(503).json({ error: "Library index is disabled" });
   try {

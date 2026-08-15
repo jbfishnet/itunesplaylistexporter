@@ -95,11 +95,13 @@
 
     const writeFailures = status.tagWriteFailures || 0;
     if (writeFailures > 0) {
+      const retryMinutes = Math.round((status.tagWriteRetryIntervalMs || 300000) / 60000);
       writeFailuresEl.style.display = "";
       writeFailuresTextEl.textContent =
         `${writeFailures} file${writeFailures === 1 ? "" : "s"} found the right metadata but the ` +
         `write to the actual file failed (missing ffmpeg, a permissions error, ...) — the search ` +
-        `index is still correct for these, only the file itself hasn't caught up. `;
+        `index is still correct for these, only the file itself hasn't caught up. Retried ` +
+        `automatically every ${retryMinutes} min, or right now: `;
     } else {
       writeFailuresEl.style.display = "none";
     }

@@ -152,8 +152,11 @@ mounted in Finder before exporting — otherwise those tracks will show as
   formats without a writer (see below) only get the result in the index,
   not the file. If the on-disk write itself fails (ffmpeg missing, a
   permissions error, ...) while the lookup still succeeded, that's tracked
-  separately and surfaced in the Queue tab with a retry button — the search
-  index already has the right metadata either way.
+  separately, surfaced in the Queue tab, and automatically retried every few
+  minutes without repeating the API lookup — a "Retry failed writes" button
+  there triggers an immediate attempt instead of waiting. The search index
+  already has the right metadata either way, regardless of whether the file
+  write has caught up yet.
 - **The index** lives at `data/library.sqlite3` (gitignored) — delete that
   file any time to force a full reindex from scratch.
 - Protected-file detection here is extension-only (`.m4p`) — unlike the
