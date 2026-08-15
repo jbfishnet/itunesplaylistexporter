@@ -105,6 +105,10 @@
         <span class="dot" style="background:${r.color};box-shadow:0 0 0 3px ${r.color}33" title="This folder's color, shown on its duplicate files too"></span>
         <span class="folder-path">${r.path}</span>
         ${r.mounted ? "" : `<span class="pill pill-not-found"><span class="pill-dot"></span>not mounted</span>`}
+        <label class="folder-main-toggle" title="The main library: preferred copy when deleting Similar Titles duplicates, and used to auto-resolve an otherwise-ambiguous playlist restore/rebuild match">
+          <input type="checkbox" data-main-root="${escapeAttr(r.path)}" ${r.main ? "checked" : ""} />
+          Main library
+        </label>
         <button type="button" class="link-btn" style="color:var(--danger)" data-remove-root="${escapeAttr(r.path)}">Remove</button>
       </div>`
       )
@@ -113,6 +117,29 @@
     foldersListEl.querySelectorAll("[data-remove-root]").forEach((btn) => {
       btn.addEventListener("click", () => removeFolder(btn.dataset.removeRoot));
     });
+    foldersListEl.querySelectorAll("[data-main-root]").forEach((cb) => {
+      cb.addEventListener("change", () => setMainRoot(cb.checked ? cb.dataset.mainRoot : null));
+    });
+  }
+
+  /** Only one folder can be main at a time — checking one implicitly
+   * replaces whichever was main before; unchecking the current one clears it
+   * entirely (no main library, every keeper decision falls back to
+   * oldest-indexed — see libraryDb.js's resolveKeeperId). */
+  async function setMainRoot(rootPath) {
+    try {
+      const res = await fetch("/api/library/roots/main", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: rootPath }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't update the main library");
+      renderFolders(data.roots);
+    } catch (err) {
+      metaEl.textContent = err.message;
+      loadFolders(); // revert the checkbox to whatever's actually configured
+    }
   }
 
   async function addFolder() {

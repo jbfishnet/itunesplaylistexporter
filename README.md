@@ -206,15 +206,29 @@ Built on the same index as the Search tab, this tab has two sections:
 - **Similar Titles** — files that share a title but differ in some other way
   (artist, album, format, size, ...) — not confirmed identical, so this could
   be a real duplicate or a genuinely different recording (a live version, a
-  cover, a remix). Deletion here follows one hard rule: **a copy under
-  `/Volumes/jb/iTunes4TB/iTunes Media/Music` is never deleted** — it's always
-  the one kept. If a group has no copy under that path, the oldest-indexed
-  copy is kept instead. Deletes in this section fire immediately (no
-  confirmation dialog), per-file, per-group ("Delete other copies"), or for
-  every group at once ("Delete All Non-Canonical Copies").
+  cover, a remix). Deletion here follows one hard rule: **a copy under your
+  designated main library is never deleted** — it's always the one kept. If a
+  group has no copy under it (or no main library is configured), the
+  oldest-indexed copy is kept instead. Deletes in this section fire
+  immediately (no confirmation dialog), per-file, per-group ("Delete other
+  copies"), or for every group at once ("Delete All Non-Canonical Copies").
 
 Both sections delete the file from disk permanently (not to the Trash) and
 remove it from the index — this can't be undone.
+
+### Main library
+
+Check **Main library** next to any configured folder in the Search tab's
+Library Folders panel to designate it as canonical. This is used in two
+places: as the preferred keeper above, and to auto-resolve an otherwise
+ambiguous playlist restore/rebuild match (see "Restoring missing tracks"
+above) — if the same song exists as 2+ physical copies (e.g. across multiple
+NAS snapshots) and exactly one is under the main library, that one is now
+auto-applied instead of being left for manual review. Only one folder can be
+main at a time; unchecking it clears the preference entirely (both features
+fall back to "oldest-indexed"/"still ambiguous" respectively). Defaults to
+this developer's own NAS path until explicitly changed, preserving prior
+behavior for anyone upgrading.
 
 ## Versioning
 

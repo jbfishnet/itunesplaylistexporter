@@ -30,13 +30,30 @@
   let similarOffset = 0;
 
   // Mirrors the server-side keeper rule in libraryDb.js's resolveKeeperId:
-  // prefer the copy under the canonical archive path, else the oldest-indexed
-  // one (group.files already arrives ordered by id ASC, so files[0] is that
-  // fallback) — kept in sync with the server, which re-derives and enforces
-  // this independently on every delete request regardless of what the client sends.
-  const PROTECTED_KEEP_PATH_PREFIX = "/Volumes/jb/iTunes4TB/iTunes Media/Music";
+  // prefer the copy under the user's configured main library, else the
+  // oldest-indexed one (group.files already arrives ordered by id ASC, so
+  // files[0] is that fallback) — kept in sync with the server, which
+  // re-derives and enforces this independently on every delete request
+  // regardless of what the client sends. Refreshed on every tab activation
+  // (see loadMainLibraryRoot below) rather than hard-coded, since the user
+  // can change it from the Search tab's Library Folders panel at any time.
+  let mainLibraryRoot = null;
+  async function loadMainLibraryRoot() {
+    try {
+      const res = await fetch("/api/library/roots");
+      const data = await res.json();
+      mainLibraryRoot = data.roots?.find((r) => r.main)?.path || null;
+    } catch {
+      // Non-fatal — resolveKeeperFile just falls back to oldest-indexed,
+      // same as "no main library configured" would.
+    }
+  }
   function resolveKeeperFile(files) {
-    return files.find((f) => f.path.startsWith(PROTECTED_KEEP_PATH_PREFIX)) || files[0];
+    if (mainLibraryRoot) {
+      const mainFile = files.find((f) => f.path.startsWith(mainLibraryRoot));
+      if (mainFile) return mainFile;
+    }
+    return files[0];
   }
 
   const FIELD_LABELS = {
@@ -472,8 +489,8 @@
 
   document.addEventListener("ple:tab-activated", (e) => {
     if (e.detail.tabName === "duplicates") {
+      loadMainLibraryRoot().then(loadSimilar); // resolveKeeperFile needs this before rendering kept/extra badges
       loadDuplicates();
-      loadSimilar();
     }
   });
 })();

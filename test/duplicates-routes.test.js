@@ -52,6 +52,56 @@ test("GET /api/library/roots reflects the seeded default root, with its mount st
   assert.equal(data.roots[0].path, libraryRoot);
   assert.equal(data.roots[0].mounted, true);
   assert.ok(data.roots[0].color, "a color must be assigned");
+  assert.equal(data.roots[0].main, false, "a temp test root must never be implicitly 'main' via the historical hard-coded default");
+});
+
+test("POST /api/library/roots/main designates a root as main (only one at a time), and path:null clears it", async (t) => {
+  const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ple-dup-mainroot-"));
+  t.after(() => fs.rmSync(secondRoot, { recursive: true, force: true }));
+  await fetch(`${BASE_URL}/api/library/roots`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: secondRoot }),
+  });
+  t.after(async () => {
+    await fetch(`${BASE_URL}/api/library/roots`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: secondRoot }),
+    });
+  });
+
+  const setRes = await fetch(`${BASE_URL}/api/library/roots/main`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: secondRoot }),
+  });
+  const setData = await setRes.json();
+  assert.equal(setRes.status, 200);
+  assert.deepEqual(
+    setData.roots.map((r) => ({ path: r.path, main: r.main })).sort((a, b) => a.path.localeCompare(b.path)),
+    [
+      { path: libraryRoot, main: false },
+      { path: secondRoot, main: true },
+    ].sort((a, b) => a.path.localeCompare(b.path))
+  );
+
+  const clearRes = await fetch(`${BASE_URL}/api/library/roots/main`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: null }),
+  });
+  const clearData = await clearRes.json();
+  assert.ok(clearData.roots.every((r) => r.main === false), "no root should be main after clearing");
+});
+
+test("POST /api/library/roots/main 404s for a path that isn't a configured root", async () => {
+  const res = await fetch(`${BASE_URL}/api/library/roots/main`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: "/not/a/configured/root" }),
+  });
+  assert.equal(res.status, 404);
 });
 
 test("POST /api/library/roots rejects a relative path, adds a valid absolute one, and rejects a duplicate add", async () => {
@@ -164,6 +214,100 @@ test("each library root gets its own distinct color, and duplicate files are att
     const data = await res.json();
     return !data.groups.some((g) => g.files.some((f) => f.path.startsWith(secondRoot)));
   }, "the second root's files to be swept back out after removal");
+});
+
+test("bulk 'Delete All Duplicates' flow: paginated fetch-then-sequential-delete removes every extra copy across every group, keeping one of each", async (t) => {
+  // A dedicated root with 3 separate duplicate pairs (6 files, 3 extras) —
+  // enough to exercise "gather ids from every page, then delete them one by
+  // one" as a real sequence, not just a single DELETE call. This mirrors
+  // exactly what public/libraryDuplicates.js's deleteAllBtn handler does:
+  // fetchAllExtraFileIds() first (paginated GETs), then a delete loop.
+  const bulkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ple-dup-bulk-"));
+  t.after(() => fs.rmSync(bulkRoot, { recursive: true, force: true }));
+
+  // Distinct content per pair — reusing the same source fixture for all 3
+  // (e.g. tagged.mp3 for everything) would make every file byte-identical to
+  // every other, collapsing what's meant to be 3 separate 2-file groups into
+  // one giant group instead. Duplicate detection is pure content-hash based,
+  // so plain distinct text content (still under a .mp3 name so the scanner
+  // picks it up) is enough — it doesn't need to be real audio.
+  for (const n of [1, 2, 3]) {
+    const content = `fake-bulk-pair-${n}-content-${"x".repeat(200)}`;
+    fs.writeFileSync(path.join(bulkRoot, `bulk${n}-keep.mp3`), content);
+    fs.writeFileSync(path.join(bulkRoot, `bulk${n}-extra.mp3`), content);
+  }
+
+  const addRes = await fetch(`${BASE_URL}/api/library/roots`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: bulkRoot }),
+  });
+  assert.equal(addRes.status, 200);
+  t.after(async () => {
+    await fetch(`${BASE_URL}/api/library/roots`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: bulkRoot }),
+    });
+  });
+
+  await waitFor(async () => {
+    const res = await fetch(`${BASE_URL}/api/library/duplicates?limit=50`);
+    const data = await res.json();
+    return data.groups.filter((g) => g.files.some((f) => f.path.startsWith(bulkRoot))).length === 3;
+  }, "all 3 bulk-root pairs to be hashed and grouped");
+
+  // fetchAllExtraFileIds(), ported: walk every page, collect every group's
+  // non-first (extra) file — deliberately using a page size smaller than the
+  // total group count so this genuinely spans multiple requests, the same
+  // way it does for real once a library has more than 100 duplicate groups.
+  async function fetchAllExtraFiles(pageSize) {
+    const files = [];
+    let cursor = 0;
+    let total = Infinity;
+    while (cursor < total) {
+      const res = await fetch(`${BASE_URL}/api/library/duplicates?limit=${pageSize}&offset=${cursor}`);
+      const data = await res.json();
+      total = data.total;
+      if (data.groups.length === 0) break;
+      for (const group of data.groups) {
+        const [, ...extras] = group.files;
+        files.push(...extras);
+      }
+      cursor += pageSize;
+    }
+    return files;
+  }
+
+  const beforeExtras = await fetchAllExtraFiles(1); // page size 1 forces several real requests worth of paging
+  const bulkExtraIds = beforeExtras.filter((f) => f.path.startsWith(bulkRoot)).map((f) => f.id);
+  assert.equal(bulkExtraIds.length, 3, "exactly the 3 extra copies from the bulk root, not the keepers");
+
+  // The delete loop itself: sequential, one at a time, exactly like the UI.
+  let failed = 0;
+  for (const id of bulkExtraIds) {
+    const res = await fetch(`${BASE_URL}/api/library/files/${id}`, { method: "DELETE" });
+    if (!res.ok) failed += 1;
+  }
+  assert.equal(failed, 0, "every extra copy must delete successfully, none should fail partway through the sequence");
+
+  // Which specific file of a pair ends up "kept" (files[0], whichever the
+  // concurrent scanner happened to index first — see libraryScanner.js)
+  // isn't something this test can predict by filename; the real invariant is
+  // just "exactly one of each pair survives", not which one.
+  for (const n of [1, 2, 3]) {
+    const survivors = [`bulk${n}-keep.mp3`, `bulk${n}-extra.mp3`].filter((name) =>
+      fs.existsSync(path.join(bulkRoot, name))
+    );
+    assert.equal(survivors.length, 1, `exactly one file from pair ${n} must survive, got: ${survivors.join(", ") || "none"}`);
+  }
+
+  const afterRes = await fetch(`${BASE_URL}/api/library/duplicates?limit=50`);
+  const afterData = await afterRes.json();
+  assert.ok(
+    !afterData.groups.some((g) => g.files.some((f) => f.path.startsWith(bulkRoot))),
+    "no group from the bulk root should remain — each is down to a single (kept) file"
+  );
 });
 
 test("GET /api/library/similar finds same-title files with a real difference, and lists which fields differ", async () => {

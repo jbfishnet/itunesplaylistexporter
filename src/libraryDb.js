@@ -173,6 +173,10 @@ function openLibraryDb(dbPath) {
     `),
     markStatus: db.prepare("UPDATE files SET enrichment_status = ?, updated_at = ? WHERE id = ?"),
     requeueNotFound: db.prepare("UPDATE files SET enrichment_status = 'pending', updated_at = ? WHERE enrichment_status = 'not_found'"),
+    setManualMetadata: db.prepare(`
+      UPDATE files SET title = ?, artist = ?, album = ?, genre = ?, year = ?,
+        enrichment_status = 'pending', tag_write_status = 'pending', updated_at = ? WHERE id = ?
+    `),
     setTagWriteStatus: db.prepare("UPDATE files SET tag_write_status = ?, updated_at = ? WHERE id = ?"),
     tagWriteFailures: db.prepare(
       "SELECT id, path, title, artist, album, genre, year, extension, protected FROM files WHERE tag_write_status = 'failed' ORDER BY id ASC LIMIT ?"
@@ -363,6 +367,33 @@ function openLibraryDb(dbPath) {
     syncFts(id, { ...tags, path: existing.path });
   }
 
+  /** The manual-correction path (Not Found tab's "Edit Metadata"): unlike
+   * markEnriched (an automated match, always a full set of fields), `fields`
+   * here is partial — only the keys the user actually typed something into
+   * (see server.js's manual-metadata route) — so it's merged over the row's
+   * *existing* values rather than replacing all five unconditionally, and
+   * every key present in `fields` overwrites its existing value outright, no
+   * emptiness check (that's the whole point: a human is correcting a
+   * mistake, not filling a gap). Resets enrichment_status to 'pending' so
+   * the background queue re-attempts the online lookup with the new,
+   * hopefully-searchable details — the "restart discovery" this exists for. */
+  function setManualMetadata(id, fields) {
+    const existing = stmts.getById.get(id);
+    if (!existing) return null;
+    invalidateAggregateCaches();
+    const merged = {
+      title: fields.title !== undefined ? fields.title : existing.title,
+      artist: fields.artist !== undefined ? fields.artist : existing.artist,
+      album: fields.album !== undefined ? fields.album : existing.album,
+      genre: fields.genre !== undefined ? fields.genre : existing.genre,
+      year: fields.year !== undefined ? fields.year : existing.year,
+    };
+    stmts.setManualMetadata.run(merged.title, merged.artist, merged.album, merged.genre, merged.year, Date.now(), id);
+    stmts.deleteFts.run(id);
+    syncFts(id, { ...merged, path: existing.path });
+    return stmts.getById.get(id);
+  }
+
   function markNotFound(id) {
     invalidateAggregateCaches();
     stmts.markStatus.run("not_found", Date.now(), id);
@@ -491,15 +522,47 @@ function openLibraryDb(dbPath) {
     return { total: qualifying.length, groups: qualifying.slice(offset, offset + limit) };
   }
 
-  // The one file in a similar-titles group that deletion must never touch —
-  // prefer whichever copy lives under the user's canonical archive path, and
-  // fall back to the oldest-indexed row (same rule Exact Duplicates already
-  // uses) when nothing in the group is under that path.
-  const PROTECTED_KEEP_PATH_PREFIX = "/Volumes/jb/iTunes4TB/iTunes Media/Music";
+  // Preserves this app's original behavior (a single hard-coded NAS path)
+  // for anyone who upgrades without ever visiting the new "main library"
+  // checkbox in the Library Folders panel — only once the user explicitly
+  // sets or clears it does getMainLibraryRoot() diverge from this default.
+  const DEFAULT_MAIN_LIBRARY_ROOT = "/Volumes/jb/iTunes4TB/iTunes Media/Music";
 
+  // getMeta() itself collapses a stored empty string to null (its own
+  // `?.value || null` fallback), so an empty string can't distinguish
+  // "explicitly cleared" from "never set" — this sentinel can, since no real
+  // filesystem path could ever equal it.
+  const MAIN_LIBRARY_ROOT_CLEARED = "__cleared__";
+
+  /** The user's designated "main" library folder — used both as the
+   * preferred keeper when deleting Similar Titles duplicates, and (see
+   * playlistRestorer.js) to auto-resolve an otherwise-ambiguous playlist
+   * restore/rebuild match when exactly one candidate lives under it.
+   * Distinguishes "never configured" (nothing in scan_meta yet -> the
+   * historical default above) from "explicitly cleared" (the sentinel above
+   * -> no main library at all, every keeper decision falls back to
+   * oldest-indexed) — see setMainLibraryRoot. */
+  function getMainLibraryRoot() {
+    const stored = getMeta("main_library_root");
+    if (stored === null) return DEFAULT_MAIN_LIBRARY_ROOT;
+    if (stored === MAIN_LIBRARY_ROOT_CLEARED) return null;
+    return stored;
+  }
+
+  function setMainLibraryRoot(rootPath) {
+    setMeta("main_library_root", rootPath || MAIN_LIBRARY_ROOT_CLEARED);
+  }
+
+  // The one file in a similar-titles group that deletion must never touch —
+  // prefer whichever copy lives under the configured main library, and fall
+  // back to the oldest-indexed row when nothing in the group is under it
+  // (or no main library is configured at all).
   function resolveKeeperId(rows) {
-    const protectedRow = rows.find((r) => r.path.startsWith(PROTECTED_KEEP_PATH_PREFIX));
-    if (protectedRow) return protectedRow.id;
+    const mainRoot = getMainLibraryRoot();
+    if (mainRoot) {
+      const mainRow = rows.find((r) => r.path.startsWith(mainRoot));
+      if (mainRow) return mainRow.id;
+    }
     return rows.reduce((oldest, r) => (r.id < oldest.id ? r : oldest)).id;
   }
 
@@ -644,6 +707,7 @@ function openLibraryDb(dbPath) {
     getStats,
     getEnrichmentBacklog,
     markEnriched,
+    setManualMetadata,
     markNotFound,
     requeueNotFound,
     setTagWriteStatus,
@@ -652,6 +716,8 @@ function openLibraryDb(dbPath) {
     getMeta,
     getLibraryRoots,
     setLibraryRoots,
+    getMainLibraryRoot,
+    setMainLibraryRoot,
     getHashCandidates,
     hasOtherFileWithSameSize,
     setHashDone,

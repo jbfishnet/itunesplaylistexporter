@@ -4,8 +4,10 @@ const assert = require("node:assert/strict");
 const { findCandidates, restorePlaylist } = require("../src/playlistRestorer");
 
 /** A minimal fake shaped like libraryDb's public surface (browse/search),
- * so the matching logic is testable without a real SQLite index. */
-function fakeLibraryDb(files) {
+ * so the matching logic is testable without a real SQLite index. mainRoot is
+ * omitted by default (undefined), matching a real libraryDb before the user
+ * has ever configured one. */
+function fakeLibraryDb(files, mainRoot) {
   return {
     browse({ title }) {
       const needle = String(title || "").trim().toLowerCase();
@@ -18,6 +20,7 @@ function fakeLibraryDb(files) {
         return terms.some((t) => haystack.includes(t));
       });
     },
+    getMainLibraryRoot: mainRoot !== undefined ? () => mainRoot : undefined,
   };
 }
 
@@ -43,6 +46,68 @@ test("findCandidates: 2+ title+artist matches are ambiguous, not auto-applied", 
   const result = findCandidates({ title: "Holiday", artist: "Madonna" }, db);
   assert.equal(result.confidence, "ambiguous");
   assert.equal(result.candidates.length, 2);
+});
+
+test("findCandidates: with a main library configured, 2+ copies auto-resolve to 'exact' when exactly one is under it", () => {
+  const db = fakeLibraryDb(
+    [
+      { id: 1, title: "Sounds Like a Melody", artist: "Alphaville", path: "/nas-backup-2021/Alphaville/Sounds Like a Melody.mp3" },
+      { id: 2, title: "Sounds Like a Melody", artist: "Alphaville", path: "/main-library/Alphaville/Sounds Like a Melody.mp3" },
+    ],
+    "/main-library"
+  );
+  const result = findCandidates({ title: "Sounds Like a Melody", artist: "Alphaville" }, db);
+  assert.equal(result.confidence, "exact");
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 2);
+});
+
+test("findCandidates: a main library that matches NONE of the ambiguous copies stays ambiguous", () => {
+  const db = fakeLibraryDb(
+    [
+      { id: 1, title: "Holiday", artist: "Madonna", path: "/backup-a/Holiday.mp3" },
+      { id: 2, title: "Holiday", artist: "Madonna", path: "/backup-b/Holiday.mp3" },
+    ],
+    "/main-library"
+  );
+  const result = findCandidates({ title: "Holiday", artist: "Madonna" }, db);
+  assert.equal(result.confidence, "ambiguous");
+  assert.equal(result.candidates.length, 2);
+});
+
+test("findCandidates: a main library that matches EVERY ambiguous copy still can't break the tie", () => {
+  const db = fakeLibraryDb(
+    [
+      { id: 1, title: "Holiday", artist: "Madonna", path: "/main-library/copy1/Holiday.mp3" },
+      { id: 2, title: "Holiday", artist: "Madonna", path: "/main-library/copy2/Holiday.mp3" },
+    ],
+    "/main-library"
+  );
+  const result = findCandidates({ title: "Holiday", artist: "Madonna" }, db);
+  assert.equal(result.confidence, "ambiguous");
+  assert.equal(result.candidates.length, 2);
+});
+
+test("findCandidates: no main library configured at all never auto-picks, even with an unambiguous-looking single copy under some path", () => {
+  const db = fakeLibraryDb([
+    { id: 1, title: "Holiday", artist: "Madonna", path: "/a/Holiday.mp3" },
+    { id: 2, title: "Holiday", artist: "Madonna", path: "/b/Holiday.mp3" },
+  ]); // mainRoot omitted entirely — getMainLibraryRoot isn't even implemented, same as a stale libraryDb build
+  const result = findCandidates({ title: "Holiday", artist: "Madonna" }, db);
+  assert.equal(result.confidence, "ambiguous");
+});
+
+test("findCandidates: main library preference never applies to the weaker title-only match (artist didn't match at all)", () => {
+  const db = fakeLibraryDb(
+    [{ id: 1, title: "Holiday", artist: "Scorpions", path: "/main-library/Holiday.mp3" }],
+    "/main-library"
+  );
+  // Track's artist is "Madonna" but the only indexed "Holiday" is by Scorpions —
+  // even though it's the sole candidate AND under the main library, this is a
+  // title-only match (wrong artist), which must stay ambiguous regardless.
+  const result = findCandidates({ title: "Holiday", artist: "Madonna" }, db);
+  assert.equal(result.confidence, "ambiguous");
+  assert.equal(result.candidates.length, 1);
 });
 
 test("findCandidates: title matches but artist differs is ambiguous, not a match", () => {

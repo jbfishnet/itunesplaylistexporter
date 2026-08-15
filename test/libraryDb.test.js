@@ -326,6 +326,52 @@ test("isDeletableSimilarFile refuses when the title no longer has 2+ members, an
   assert.equal(db.isDeletableSimilarFile(999999), false, "unknown id");
 });
 
+test("getMainLibraryRoot defaults to the historical hard-coded iTunes4TB path until explicitly configured", (t) => {
+  const db = freshDb(t);
+  assert.equal(db.getMainLibraryRoot(), "/Volumes/jb/iTunes4TB/iTunes Media/Music");
+});
+
+test("setMainLibraryRoot changes the keeper preference used by isDeletableSimilarFile, overriding the hard-coded default", (t) => {
+  const db = freshDb(t);
+  const otherId = db.upsertFile({
+    path: "/Volumes/jb/iTunes4TB/iTunes Media/Music/Artist/Same Title.mp3", size: 100, mtimeMs: 1, extension: "mp3", title: "Same Title", artist: "X", scanId: 1,
+  });
+  const chosenId = db.upsertFile({
+    path: "/Volumes/my-nas/Backup/Same Title.mp3", size: 200, mtimeMs: 1, extension: "mp3", title: "Same Title", artist: "X", scanId: 1,
+  });
+
+  // Before configuring anything, the historical default still applies —
+  // the iTunes4TB copy is the keeper.
+  assert.equal(db.isDeletableSimilarFile(otherId), false);
+  assert.equal(db.isDeletableSimilarFile(chosenId), true);
+
+  db.setMainLibraryRoot("/Volumes/my-nas/Backup");
+  assert.equal(db.getMainLibraryRoot(), "/Volumes/my-nas/Backup");
+
+  // Now the *other* copy is the keeper — the preference actually flipped.
+  assert.equal(db.isDeletableSimilarFile(chosenId), false, "the newly-configured main library copy must now be the keeper");
+  assert.equal(db.isDeletableSimilarFile(otherId), true, "the iTunes4TB copy is deletable now that it's no longer the main library");
+});
+
+test("setMainLibraryRoot(null) explicitly clears it — falls back to oldest-indexed, not back to the hard-coded default", (t) => {
+  const db = freshDb(t);
+  const iTunes4TbId = db.upsertFile({
+    path: "/Volumes/jb/iTunes4TB/iTunes Media/Music/Artist/Cleared Test.mp3", size: 100, mtimeMs: 1, extension: "mp3", title: "Cleared Test", artist: "X", scanId: 1,
+  });
+  const olderElsewhereId = db.upsertFile({
+    path: "/Volumes/elsewhere/Cleared Test.mp3", size: 200, mtimeMs: 1, extension: "mp3", title: "Cleared Test", artist: "X", scanId: 1,
+  });
+
+  db.setMainLibraryRoot(null);
+  assert.equal(db.getMainLibraryRoot(), null, "explicitly cleared must report null, not silently revert to the historical default");
+
+  // Neither file is "main" now, so the fallback (oldest-indexed) decides —
+  // iTunes4TbId was inserted first, so it's the keeper despite no longer
+  // being anyone's preferred path.
+  assert.equal(db.isDeletableSimilarFile(iTunes4TbId), false, "oldest-indexed wins the fallback, not the old hard-coded path specifically");
+  assert.equal(db.isDeletableSimilarFile(olderElsewhereId), true);
+});
+
 test("works against a real on-disk file, creating parent directories as needed", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ple-libdb-"));
   const dbPath = path.join(dir, "nested", "library.sqlite3");

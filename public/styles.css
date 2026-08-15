@@ -477,6 +477,8 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
 .error-state .retry-link { margin-left: 6px; }
 
 .col-pos { font-family: var(--font-mono); color: var(--text-faint); font-variant-numeric: tabular-nums; width: 32px; }
+.col-select { width: 28px; }
+.col-select input[type="checkbox"], td.col-select input[type="checkbox"] { accent-color: var(--accent); }
 .track-title { font-weight: 600; }
 .track-sub { font-size: 11.5px; color: var(--text-muted); }
 .col-format { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
@@ -542,6 +544,17 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
   white-space: nowrap;
 }
 .folder-row.missing .folder-path { color: var(--text-faint); }
+.folder-main-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.folder-main-toggle input { accent-color: var(--accent); cursor: pointer; }
 .folder-add-row { display: flex; gap: 8px; padding: 12px 14px; background: var(--surface-2); }
 .folder-add-row input { flex: 1; }
 .folder-empty { padding: 12px 14px; color: var(--text-faint); font-size: 12.5px; }
@@ -728,6 +741,10 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
 .progress-overlay.open { display: flex; }
 
 .progress-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); width: 100%; max-width: 460px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; }
+
+.metadata-edit-fields { display: flex; flex-direction: column; gap: 10px; }
+.metadata-edit-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+.metadata-edit-fields input { width: 100%; }
 .progress-title { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
 .progress-track { height: 8px; border-radius: 100px; background: var(--surface-2); overflow: hidden; }
 .progress-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 100px; transition: width 0.25s ease; }

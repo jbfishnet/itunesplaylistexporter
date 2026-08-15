@@ -42,18 +42,29 @@
       </p>
       <div class="callout callout-note">
         <p>
-          Deletion here follows one hard rule: <strong>a copy under the canonical NAS
-          archive path is never deleted</strong> — it's always the one kept. If a group
-          has no copy under that path, the oldest-indexed copy is kept instead. The
-          server re-derives and enforces this on every delete request regardless of
-          what the client sends, so a stale or racing UI state can never delete the
-          protected copy.
+          Deletion here follows one hard rule: <strong>a copy under the user's
+          designated main library is never deleted</strong> — it's always the one kept.
+          If a group has no copy under it (or no main library is configured), the
+          oldest-indexed copy is kept instead. The server re-derives and enforces this
+          on every delete request regardless of what the client sends, so a stale or
+          racing UI state can never delete the protected copy.
         </p>
       </div>
       <p>
         Deletes in this section fire immediately (no confirmation dialog), per-file,
         per-group ("Delete other copies"), or for every group at once ("Delete All
         Non-Canonical Copies").
+      </p>
+
+      <h2>Main library</h2>
+      <p>
+        Check <strong>Main library</strong> next to any folder in the Search tab's
+        Library Folders panel to designate it canonical. It drives the keeper
+        preference above, and (see <a href="playlists.html#rebuild">Playlists &amp;
+        Restore</a>) auto-resolves an otherwise-ambiguous restore/rebuild match when
+        the same song exists as 2+ physical copies and exactly one is under it. Only
+        one folder can be main at a time; unchecking it clears the preference
+        entirely rather than reverting to any implicit default.
       </p>
 
       <div class="callout callout-warning">

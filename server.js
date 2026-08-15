@@ -37,6 +37,13 @@ const folderPicker = require("./src/folderPicker");
 const exporter = require("./src/exporter");
 const playlistRestorer = require("./src/playlistRestorer");
 const playlistRebuilder = require("./src/playlistRebuilder");
+const tagWriter = require("./src/tagWriter");
+// Swappable only for tests, same reasoning as PLE_TEST_MUSIC_LIBRARY above:
+// real moveToTrash() shells out to Finder via AppleScript, which needs
+// Automation/TCC consent a headless CI runner never has.
+const fileTrash = process.env.PLE_TEST_FILE_TRASH
+  ? require(path.resolve(process.env.PLE_TEST_FILE_TRASH))
+  : require("./src/fileTrash");
 const { openLibraryDb } = require("./src/libraryDb");
 const { createScheduler } = require("./src/libraryScheduler");
 const { createEnrichmentQueue } = require("./src/enrichmentQueue");
@@ -647,6 +654,7 @@ function findRootIndexForPath(filePath, roots) {
 
 function rootsWithMountStatus() {
   const roots = libraryDb.getLibraryRoots() || [];
+  const mainRoot = libraryDb.getMainLibraryRoot();
   return roots.map((root, index) => {
     let mounted = false;
     try {
@@ -654,7 +662,7 @@ function rootsWithMountStatus() {
     } catch {
       mounted = false;
     }
-    return { path: root, mounted, color: colorForRootIndex(index) };
+    return { path: root, mounted, color: colorForRootIndex(index), main: root === mainRoot };
   });
 }
 
@@ -688,6 +696,29 @@ app.delete("/api/library/roots", (req, res) => {
 
   libraryDb.setLibraryRoots(updated);
   libraryScheduler?.triggerNow(); // sweeps files under the removed folder out of the index promptly
+  res.json({ roots: rootsWithMountStatus() });
+});
+
+// Designates (or, with path: null, clears) which configured folder is the
+// "main" library — used as the preferred keeper when deleting Similar
+// Titles duplicates, and to auto-resolve an otherwise-ambiguous playlist
+// restore/rebuild match (see playlistRestorer.js's findCandidates). Only
+// one folder can be main at a time; setting a new one implicitly replaces
+// whichever was main before.
+app.post("/api/library/roots/main", (req, res) => {
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+  const targetRoot = req.body?.path;
+
+  if (targetRoot === null) {
+    libraryDb.setMainLibraryRoot(null);
+    return res.json({ roots: rootsWithMountStatus() });
+  }
+
+  const trimmed = (targetRoot || "").toString().trim();
+  const roots = libraryDb.getLibraryRoots() || [];
+  if (!roots.includes(trimmed)) return res.status(404).json({ error: "That folder isn't in the configured list" });
+
+  libraryDb.setMainLibraryRoot(trimmed);
   res.json({ roots: rootsWithMountStatus() });
 });
 
@@ -814,6 +845,95 @@ app.delete("/api/library/similar-files/:id", (req, res) => {
     libraryDb.deleteFileRow(id);
     res.json({ deleted: true, path: row.path });
   });
+});
+
+// Not Found tab's delete path — unlike the two routes above, a not_found
+// file has no confirmed duplicate/keeper elsewhere backing the deletion, so
+// it goes to the actual macOS Trash (recoverable) instead of being unlinked
+// outright. Only ever allowed for a file *currently* still enrichment_status
+// = 'not_found' — re-derived from the DB on every call, never trusting the
+// client, same posture as every other delete route in this app.
+app.delete("/api/library/not-found-files/:id", async (req, res) => {
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid file id" });
+
+  const row = libraryDb.getById(id);
+  if (!row) return res.status(404).json({ error: "File not found in the index" });
+  if (row.enrichment_status !== "not_found") {
+    return res.status(409).json({ error: "This file is no longer in the Not Found list — refresh and try again" });
+  }
+
+  try {
+    await fileTrash.moveToTrash(row.path);
+  } catch (err) {
+    if (!fs.existsSync(row.path)) {
+      // Already gone from disk some other way — the index row is stale
+      // either way and should go, same as the ENOENT case in the routes above.
+    } else {
+      res.status(500).json({ error: `Couldn't move the file to the Trash: ${err.message}` });
+      return;
+    }
+  }
+  libraryDb.deleteFileRow(id);
+  res.json({ deleted: true, path: row.path });
+});
+
+// Not Found tab's manual metadata correction — one or more files (multiselect
+// applies the same field values to every one) get whatever fields the user
+// actually filled in written directly, overwriting existing values without
+// asking (a deliberate human correction, not an automated guess — see
+// tagWriter.writeTagsOverwrite). Both the index and the file itself are
+// updated, and enrichment_status resets to 'pending' so the background queue
+// re-attempts the online lookup with the corrected details — the "restart
+// discovery" this exists for, no separate trigger needed.
+app.post("/api/library/not-found-files/manual-metadata", async (req, res) => {
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v) => parseInt(v, 10)).filter(Number.isFinite) : [];
+  if (ids.length === 0) return res.status(400).json({ error: "ids is required and must be a non-empty array" });
+
+  // Blank fields mean "don't change this field" — only non-blank ones are
+  // applied, and they're applied identically to every selected file.
+  const raw = req.body?.metadata || {};
+  const fields = {};
+  for (const key of ["title", "artist", "album", "genre"]) {
+    if (typeof raw[key] === "string" && raw[key].trim()) fields[key] = raw[key].trim();
+  }
+  if (raw.year !== undefined && raw.year !== null && String(raw.year).trim() !== "") {
+    const year = parseInt(raw.year, 10);
+    if (Number.isFinite(year)) fields.year = year;
+  }
+  if (Object.keys(fields).length === 0) return res.status(400).json({ error: "At least one field must be filled in" });
+
+  const results = [];
+  for (const id of ids) {
+    const row = libraryDb.getById(id);
+    if (!row) {
+      results.push({ id, ok: false, error: "Not found in the index" });
+      continue;
+    }
+    if (row.enrichment_status !== "not_found") {
+      results.push({ id, ok: false, error: "No longer in the Not Found list — skipped" });
+      continue;
+    }
+
+    libraryDb.setManualMetadata(id, fields);
+    try {
+      const writeResult = await tagWriter.writeTagsOverwrite(row, fields);
+      libraryDb.setTagWriteStatus(id, writeResult.written ? "written" : "skipped");
+      results.push({ id, ok: true, written: writeResult.written, writeReason: writeResult.reason });
+    } catch (err) {
+      // The index update above already succeeded regardless — only the
+      // physical file write failed. Tracked via tag_write_status the same
+      // way enrichment write failures are, retryable via the same
+      // /api/library/retry-tag-writes path.
+      libraryDb.setTagWriteStatus(id, "failed");
+      results.push({ id, ok: true, written: false, writeError: err.message });
+    }
+  }
+
+  res.json({ results, appliedFields: Object.keys(fields), requeued: results.filter((r) => r.ok).length });
 });
 
 const PORT = process.env.PORT || 4173;
