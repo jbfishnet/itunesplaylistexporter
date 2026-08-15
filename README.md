@@ -65,6 +65,52 @@ npm start
 
 This opens `http://localhost:4173` in your default browser.
 
+### Native app
+
+For a real Mac app instead of a browser tab — Dock icon, its own window,
+Cmd+Q/Cmd+W/Cmd+C/Cmd+V, an About panel — build and install
+`Playlist Exporter.app`:
+
+```bash
+cd macapp
+./build.sh
+cp -R "dist/Playlist Exporter.app" /Applications/
+```
+
+It's a thin native window (Swift + WKWebView) around the same local
+server. The build is fully self-contained and relocatable: `build.sh`
+copies `server.js`, `src/`, `public/`, and a clean production
+`node_modules` into the app bundle itself
+(`Contents/Resources/app`), so the built `.app` runs standalone on any
+Mac it's copied to — it no longer depends on this git checkout existing
+at a fixed path. At launch it locates Node.js itself (checking common
+install locations, then the user's shell `PATH`) rather than assuming a
+specific install path, and it needs Node.js 18+ to already be installed
+on that Mac — if it can't find one, it shows an alert explaining that and
+links to nodejs.org rather than failing silently. The search index and
+logs live under that user's own `~/Library/Application Support/Playlist
+Exporter` and `~/Library/Logs/Playlist Exporter`, not inside the app
+bundle (which isn't writable once installed).
+
+Optionally, `macapp/install-autostart.sh` installs a LaunchAgent that runs
+the server headlessly at every login (`macapp/uninstall-autostart.sh`
+removes it) — the app window works fine with or without this, it just
+skips the cold-start delay when the LaunchAgent is already running. It
+looks up the installed app and the current user's Node.js at install
+time, so it's portable the same way the app itself is.
+
+**Distributing this to other people:** the app is only ad-hoc signed (see
+above — no Apple Developer account). Gatekeeper blocks ad-hoc-signed apps
+downloaded from the internet on any Mac other than the one that built
+them ("[App] is damaged and can't be opened"), until the person opening
+it either right-clicks it and chooses **Open** the first time, or runs
+`xattr -cr "/Applications/Playlist Exporter.app"` once after copying it
+over. Removing that friction for real requires enrolling in the Apple
+Developer Program (paid), signing with a Developer ID Application
+certificate, and notarizing each build (`xcrun notarytool submit` +
+`xcrun stapler staple`) — not set up here, since it's a cost/account
+decision rather than a code one.
+
 ### First run: Automation permission
 
 The first time the app queries Music.app, macOS will show a permission
