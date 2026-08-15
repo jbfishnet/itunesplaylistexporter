@@ -135,6 +135,54 @@ body {
   white-space: pre-wrap;
 }
 
+.toast {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  max-width: 480px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: var(--success-wash);
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.toast.toast-error { background: var(--danger-wash); color: var(--danger); }
+
+/* ---------- Playlist right-click context menu ---------- */
+.context-menu {
+  position: fixed;
+  z-index: 600;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 200px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.context-menu li { margin: 0; }
+.context-menu button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.context-menu button:hover { background: var(--surface-2); }
+.context-menu button.danger { color: var(--danger); }
+.context-menu button.danger:hover { background: var(--danger-wash); }
+.context-menu .menu-divider { height: 1px; background: var(--border); margin: 6px 4px; }
+
 /* ---------- Tabs ---------- */
 .tabbar {
   display: flex;

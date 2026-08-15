@@ -56,6 +56,29 @@ library, not just reads from it:
   supported on your setup, the track is reported as such so you can download
   it manually in Music.app instead, then restore again.
 
+Restoring in place has one real limitation worth knowing: Music.app's
+AppleScript dictionary has no way to reposition a track within a playlist
+(verified directly against its scripting interface — `move` only repositions
+whole playlists, and `add`/`duplicate`'s documented position-specifier
+support doesn't actually work), so a restored track always lands at the end
+of the playlist, not back in its original spot.
+
+### Right-click a playlist: rebuild as an enriched copy, or delete it
+
+Right-click any playlist in the sidebar for a small options menu:
+
+- **Rebuild as enriched copy** builds a brand-new playlist (named
+  `"Original Name (Enriched)"`) with every track from the original, in the
+  *same order* — missing tracks with an exact match are replaced with the
+  real file right in their original slot, and anything ambiguous or
+  unmatched is preserved exactly as-is rather than dropped. This is the fix
+  for the ordering limitation above: instead of trying to reposition a track
+  in place (which Music.app's scripting can't do), it builds the whole
+  playlist fresh in the right order to begin with. The original playlist is
+  never modified — a rebuild is always safe to run.
+- **Delete playlist…** asks for confirmation, then deletes the playlist
+  itself (not its tracks) — irreversible from this app's side.
+
 ## Setup
 
 ```bash

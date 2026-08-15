@@ -262,10 +262,73 @@ end tell
   await runAppleScript(script);
 }
 
+/**
+ * Creates a new, empty user playlist and returns its id. Used by
+ * playlistRebuilder's "rebuild as enriched copy" — the copy is always a
+ * brand-new playlist, never the original mutated in place, so a failure
+ * partway through a rebuild can never leave the original damaged.
+ */
+async function createPlaylist(name) {
+  const script = `
+tell application "Music"
+  set newPlaylist to (make new playlist with properties {name:"${escapeAppleScriptString(name)}"})
+  return (id of newPlaylist as string)
+end tell
+`;
+  const raw = await runAppleScript(script);
+  return raw.trim();
+}
+
+/**
+ * Copies one existing track (addressed by its persistent per-entry id in
+ * sourcePlaylistId, same addressing as removeTrackFromPlaylist above) into
+ * destPlaylistId, preserving its current state exactly. Unlike
+ * addFileToPlaylist, this never needs a local file path — verified
+ * empirically against a real mixed playlist: a local "ready" track keeps its
+ * local file location in the copy, and a still-missing/cloud-matched track
+ * (no local file at all) duplicates cleanly too, staying just as missing in
+ * the copy. That's the common case this exists for: preserving a slot a
+ * rebuild couldn't resolve, rather than silently dropping it.
+ */
+async function duplicateTrackToPlaylist(sourcePlaylistId, trackId, destPlaylistId) {
+  const numericSourceId = parseInt(sourcePlaylistId, 10);
+  const numericDestId = parseInt(destPlaylistId, 10);
+  if (!Number.isFinite(numericSourceId)) throw new Error(`Invalid source playlist id: ${sourcePlaylistId}`);
+  if (!Number.isFinite(numericDestId)) throw new Error(`Invalid destination playlist id: ${destPlaylistId}`);
+  if (!trackId) throw new Error("Missing track id");
+  const script = `
+tell application "Music"
+  set sourcePlaylist to (first playlist whose id is ${numericSourceId})
+  set destPlaylist to (first playlist whose id is ${numericDestId})
+  set theTrack to (some track of sourcePlaylist whose id is ${parseInt(trackId, 10)})
+  duplicate theTrack to destPlaylist
+end tell
+`;
+  await runAppleScript(script);
+}
+
+/**
+ * Permanently deletes a playlist itself (not the underlying library tracks
+ * it contains) — the write path behind the UI's right-click "Delete".
+ */
+async function deletePlaylist(playlistId) {
+  const numericId = parseInt(playlistId, 10);
+  if (!Number.isFinite(numericId)) throw new Error(`Invalid playlist id: ${playlistId}`);
+  const script = `
+tell application "Music"
+  delete (first playlist whose id is ${numericId})
+end tell
+`;
+  await runAppleScript(script);
+}
+
 module.exports = {
   listPlaylists,
   getPlaylistTracks,
   addFileToPlaylist,
   removeTrackFromPlaylist,
   attemptDownload,
+  createPlaylist,
+  duplicateTrackToPlaylist,
+  deletePlaylist,
 };

@@ -36,6 +36,7 @@ const trackStatus = require("./src/trackStatus");
 const folderPicker = require("./src/folderPicker");
 const exporter = require("./src/exporter");
 const playlistRestorer = require("./src/playlistRestorer");
+const playlistRebuilder = require("./src/playlistRebuilder");
 const { openLibraryDb } = require("./src/libraryDb");
 const { createScheduler } = require("./src/libraryScheduler");
 const { createEnrichmentQueue } = require("./src/enrichmentQueue");
@@ -178,6 +179,10 @@ function candidateSummary(file) {
   return { id: file.id, path: file.path, title: file.title, artist: file.artist, album: file.album };
 }
 
+// This route and the ones below (restore/apply, rebuild, playlist delete)
+// are the only code in this app that writes to the user's real Music.app
+// library — everything else only ever reads from it.
+//
 // The first write path into the user's real Music library this app has ever
 // had. For every currently-missing track: an exact (title+artist) local-index
 // match is auto-applied (imported into the library + added to the playlist,
@@ -253,6 +258,60 @@ app.post("/api/playlists/:id/restore/apply", async (req, res) => {
     await musicLibrary.addFileToPlaylist(playlistId, file.path);
     if (trackMusicAppId) await musicLibrary.removeTrackFromPlaylist(playlistId, trackMusicAppId);
     res.json({ applied: true, path: file.path });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Builds a brand-new playlist containing every track from this one, in
+// order, with exact local-index matches substituted for missing tracks —
+// see src/playlistRebuilder.js for why this exists instead of just fixing
+// order in place (Music.app's AppleScript has no way to reposition a track
+// within a playlist at all). The source playlist is never modified.
+app.post("/api/playlists/:id/rebuild", async (req, res) => {
+  const playlistId = req.params.id;
+  try {
+    const [rawTracks, allPlaylists] = await Promise.all([
+      musicLibrary.getPlaylistTracks(playlistId),
+      musicLibrary.listPlaylists(),
+    ]);
+    const tracks = classifiedTracks(rawTracks);
+    const original = allPlaylists.find((p) => String(p.id) === String(playlistId));
+    const originalName = original?.name || "Playlist";
+
+    const { plan, summary } = playlistRebuilder.planRebuild({ tracks, libraryDb });
+    const newPlaylistName = playlistRebuilder.chooseRebuildName(
+      originalName,
+      allPlaylists.map((p) => p.name)
+    );
+
+    const { newPlaylistId, results } = await playlistRebuilder.executeRebuild({
+      musicLibrary,
+      sourcePlaylistId: playlistId,
+      newPlaylistName,
+      plan,
+    });
+
+    res.json({
+      newPlaylistId,
+      newPlaylistName,
+      summary,
+      failed: results.filter((r) => !r.ok),
+      libraryIndexAvailable: Boolean(libraryDb),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Permanently deletes a playlist (not its underlying library tracks) — the
+// write path behind the UI's right-click "Delete" option. Irreversible from
+// this app's side; Music.app itself may still offer an Undo immediately
+// after, same as deleting a playlist by hand.
+app.delete("/api/playlists/:id", async (req, res) => {
+  try {
+    await musicLibrary.deletePlaylist(req.params.id);
+    res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

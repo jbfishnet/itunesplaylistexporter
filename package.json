@@ -1,6 +1,6 @@
 {
   "name": "itunesplaylistexporter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Export Music.app playlists to a folder structure on a memory card, skipping DRM-protected and missing tracks.",
   "private": true,
   "main": "server.js",

@@ -36,12 +36,25 @@
   const nasStatusText = el("nasStatusText");
   const destPathEl = el("destPath");
   const destFreeEl = el("destFree");
+  const toastEl = el("toast");
+  const contextMenuEl = el("playlistContextMenu");
 
   function showError(message, hint) {
     errorBanner.style.display = "flex";
     errorBanner.innerHTML = `⚠ ${message}${hint ? `<br><code>${hint}</code>` : ""}`;
     nasStatus.querySelector(".dot").classList.add("warn");
     nasStatusText.textContent = "not connected";
+  }
+
+  let toastTimer = null;
+  function showToast(message, { error = false, durationMs = 6000 } = {}) {
+    clearTimeout(toastTimer);
+    toastEl.textContent = message;
+    toastEl.className = "toast" + (error ? " toast-error" : "");
+    toastEl.style.display = "block";
+    toastTimer = setTimeout(() => {
+      toastEl.style.display = "none";
+    }, durationMs);
   }
 
   /** Persisted so the app has something to show immediately on load without
@@ -295,6 +308,99 @@
     }
   }
 
+  // ---------- Playlist right-click menu (rebuild as enriched copy, delete) ----------
+  // The first entries in what's meant to be an extensible playlist options
+  // menu, not a one-off "delete button" — right-click a playlist in the
+  // sidebar to open it.
+
+  let contextMenuTarget = null; // { id, name } of the playlist the open menu applies to
+
+  function closeContextMenu() {
+    contextMenuEl.style.display = "none";
+    contextMenuEl.innerHTML = "";
+    contextMenuTarget = null;
+  }
+
+  function openContextMenu(x, y, playlist) {
+    contextMenuTarget = playlist;
+    contextMenuEl.innerHTML = `
+      <li><button type="button" data-menu-action="rebuild">Rebuild as enriched copy</button></li>
+      <li class="menu-divider"></li>
+      <li><button type="button" data-menu-action="delete" class="danger">Delete playlist…</button></li>
+    `;
+    contextMenuEl.style.display = "block";
+    // Keep the menu fully on-screen rather than letting it run off the
+    // right/bottom edge when a playlist near the sidebar's edge is clicked.
+    const menuRect = contextMenuEl.getBoundingClientRect();
+    const left = Math.min(x, window.innerWidth - menuRect.width - 8);
+    const top = Math.min(y, window.innerHeight - menuRect.height - 8);
+    contextMenuEl.style.left = `${Math.max(8, left)}px`;
+    contextMenuEl.style.top = `${Math.max(8, top)}px`;
+
+    contextMenuEl.querySelector('[data-menu-action="rebuild"]').addEventListener("click", () => {
+      closeContextMenu();
+      rebuildPlaylistCopy(playlist.id, playlist.name);
+    });
+    contextMenuEl.querySelector('[data-menu-action="delete"]').addEventListener("click", () => {
+      closeContextMenu();
+      deletePlaylistWithConfirm(playlist.id, playlist.name);
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    if (contextMenuTarget && !contextMenuEl.contains(e.target)) closeContextMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && contextMenuTarget) closeContextMenu();
+  });
+  // The sidebar list is rebuilt on every render (see renderSidebar), so a
+  // menu bound to an item that's about to be replaced must close itself
+  // rather than pointing at a detached, stale element.
+  window.addEventListener("scroll", () => contextMenuTarget && closeContextMenu(), true);
+
+  /** Builds a fresh, correctly-ordered copy of the playlist with missing
+   * tracks resolved where possible — see docs/playlists.html#restore for why
+   * this exists as a separate copy instead of fixing order in the original
+   * (Music.app's AppleScript has no way to reposition a track within a
+   * playlist at all). The original is never modified. */
+  async function rebuildPlaylistCopy(id, name) {
+    showToast(`Rebuilding "${name}"…`);
+    try {
+      const res = await fetch(`/api/playlists/${encodeURIComponent(id)}/rebuild`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Rebuild failed");
+
+      const { summary } = data;
+      const parts = [];
+      if (summary.fixed) parts.push(`${summary.fixed} fixed`);
+      if (summary.keptReady) parts.push(`${summary.keptReady} already fine`);
+      if (summary.keptOther) parts.push(`${summary.keptOther} kept as-is`);
+      if (summary.stillMissing) parts.push(`${summary.stillMissing} still missing`);
+      showToast(`Created "${data.newPlaylistName}" — ${parts.join(", ")}.`);
+
+      await refreshPlaylists({ silent: true });
+    } catch (err) {
+      showToast(`Couldn't rebuild "${name}": ${err.message}`, { error: true });
+    }
+  }
+
+  async function deletePlaylistWithConfirm(id, name) {
+    if (!confirm(`Delete "${name}"? This can't be undone from here.`)) return;
+    try {
+      const res = await fetch(`/api/playlists/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      selectedIds.delete(id);
+      trackCache.delete(id);
+      errorCache.delete(id);
+      restoreState.delete(id);
+      showToast(`Deleted "${name}".`);
+      await refreshPlaylists({ silent: true });
+    } catch (err) {
+      showToast(`Couldn't delete "${name}": ${err.message}`, { error: true });
+    }
+  }
+
   function bindRestoreButtons(container) {
     container.querySelectorAll("[data-restore-playlist]").forEach((btn) => {
       btn.addEventListener("click", () => restorePlaylistTracks(btn.dataset.restorePlaylist));
@@ -521,6 +627,10 @@
         retryFetch(p.id);
       });
     }
+    item.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY, { id: p.id, name: p.name });
+    });
     return item;
   }
 
