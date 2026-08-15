@@ -1,6 +1,7 @@
 const path = require("path");
 const { identifyByFingerprint } = require("./acoustId");
 const { writeTagsForRow } = require("./tagWriter");
+const { readTags } = require("./tagReader");
 
 const ITUNES_SEARCH_URL = "https://itunes.apple.com/search";
 
@@ -9,6 +10,14 @@ const ITUNES_SEARCH_URL = "https://itunes.apple.com/search";
 // has no published personal-use quota, but bursts are known to draw
 // transient 403s, and this is a background process with nowhere to be.
 const DEFAULT_INTERVAL_MS = 1750;
+
+// Retrying a failed write is local-only (no API pacing to respect), but a
+// failure is usually environmental (ffmpeg not installed, a share gone
+// read-only) rather than transient, so retrying on the same tight cadence as
+// the search queue would just repeat the same failure a thousand times an
+// hour for no benefit. Every 5 minutes is frequent enough to recover
+// promptly once the actual problem is fixed, without being noisy.
+const DEFAULT_RETRY_INTERVAL_MS = 5 * 60 * 1000;
 
 // Old file-sharing/scene rips frequently have spam baked directly into the
 // artist tag itself (a tracker URL, a rapidshare link, ...) rather than
@@ -146,10 +155,17 @@ function resultToTags(result) {
  * needed, and it survives restarts for free). fetchFn is injectable so tests
  * never make a real network call.
  */
-function createEnrichmentQueue({ db, fetchFn = globalThis.fetch, intervalMs = DEFAULT_INTERVAL_MS }) {
+function createEnrichmentQueue({
+  db,
+  fetchFn = globalThis.fetch,
+  intervalMs = DEFAULT_INTERVAL_MS,
+  retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS,
+}) {
   const state = { processed: 0, enriched: 0, notFound: 0, lastError: null };
   let timer = null;
+  let retryTimer = null;
   let busy = false;
+  let retryBusy = false;
 
   async function searchITunes(term) {
     const url = `${ITUNES_SEARCH_URL}?media=music&entity=song&limit=5&term=${encodeURIComponent(term)}`;
@@ -194,9 +210,19 @@ function createEnrichmentQueue({ db, fetchFn = globalThis.fetch, intervalMs = DE
       if (tags) {
         db.markEnriched(row.id, tags);
         state.enriched += 1;
-        writeTagsForRow(row, tags).catch((err) => {
+        // Awaited (not fire-and-forget) so a failure here — ffmpeg missing,
+        // a permissions error, the NAS hiccupping mid-write — is actually
+        // recorded rather than silently lost. markEnriched above already
+        // saved the right metadata to the index regardless, so a failure
+        // here only means the *file itself* hasn't caught up yet; it never
+        // costs another API lookup to retry (see retryFailedWrites below).
+        try {
+          const result = await writeTagsForRow(row, tags);
+          db.setTagWriteStatus(row.id, result.written ? "written" : "skipped");
+        } catch (err) {
           state.lastError = `Tag write-back failed for ${row.path}: ${err.message}`;
-        });
+          db.setTagWriteStatus(row.id, "failed");
+        }
       } else {
         db.markNotFound(row.id);
         state.notFound += 1;
@@ -207,20 +233,77 @@ function createEnrichmentQueue({ db, fetchFn = globalThis.fetch, intervalMs = DE
     }
   }
 
+  /** Re-attempts every currently-failed tag write, re-reading each file's
+   * *current* on-disk tags first rather than assuming nothing changed since
+   * the failed attempt (the row's DB fields already hold the target values
+   * from the original successful lookup, so no API call is needed here —
+   * only the local write is retried). Runs automatically every
+   * retryIntervalMs (see start()) and can also be triggered on demand via
+   * POST /api/library/retry-tag-writes — e.g. right after installing
+   * ffmpeg, rather than waiting for the next scheduled pass. The busy guard
+   * only protects against two passes overlapping (one running long, the
+   * next tick landing before it finishes); it isn't a rate limit — a manual
+   * trigger mid-pass just sees {attempted: 0, ...} and can be retried a
+   * moment later. */
+  async function retryFailedWrites(limit = 200) {
+    if (retryBusy) return { attempted: 0, written: 0, stillFailed: 0 };
+    retryBusy = true;
+    try {
+      const rows = db.getTagWriteFailures(limit);
+      let written = 0;
+      let stillFailed = 0;
+      for (const row of rows) {
+        const onDisk = await readTags(row.path);
+        if (!onDisk.ok) {
+          stillFailed += 1;
+          state.lastError = `Tag write retry skipped for ${row.path}: file isn't readable (${onDisk.error})`;
+          continue;
+        }
+        try {
+          const result = await writeTagsForRow(
+            { ...onDisk, path: row.path },
+            { title: row.title, artist: row.artist, album: row.album, genre: row.genre, year: row.year }
+          );
+          db.setTagWriteStatus(row.id, result.written ? "written" : "skipped");
+          written += 1;
+        } catch (err) {
+          state.lastError = `Tag write retry failed for ${row.path}: ${err.message}`;
+          stillFailed += 1;
+        }
+      }
+      return { attempted: rows.length, written, stillFailed };
+    } finally {
+      retryBusy = false;
+    }
+  }
+
   function start() {
     timer = setInterval(processOne, intervalMs);
     timer.unref();
+    retryTimer = setInterval(() => {
+      retryFailedWrites().catch((err) => {
+        state.lastError = `Scheduled tag-write retry pass failed: ${err.message}`;
+      });
+    }, retryIntervalMs);
+    retryTimer.unref();
   }
 
   function stop() {
     if (timer) clearInterval(timer);
+    if (retryTimer) clearInterval(retryTimer);
   }
 
   function getState() {
-    return { ...state, backlogSize: db.getStats().enrichmentCounts.pending || 0, intervalMs };
+    return {
+      ...state,
+      backlogSize: db.getStats().enrichmentCounts.pending || 0,
+      tagWriteFailures: db.getStats().tagWriteCounts.failed || 0,
+      intervalMs,
+      retryIntervalMs,
+    };
   }
 
-  return { start, stop, processOne, getState };
+  return { start, stop, processOne, retryFailedWrites, getState };
 }
 
 module.exports = {

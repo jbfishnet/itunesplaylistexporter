@@ -9,6 +9,7 @@
   const trackCache = new Map();     // id -> tracks[] (classified)
   const trackSyncedAt = new Map();  // id -> ms timestamp of that playlist's last successful sync
   const errorCache = new Map();     // id -> error message string
+  const restoreState = new Map();   // id -> { running, result: {fixed,needsReview,downloading,unsupported,libraryIndexAvailable}|null, error }
   const fetching = new Set();       // ids currently being fetched (foreground — shows "checking…")
   const backgroundRefreshing = new Set(); // ids currently being silently refreshed — never shown as "checking…"
   let searchQuery = "";
@@ -238,6 +239,125 @@
     trackCache.delete(id);
     autoHealAttempts.delete(id);
     fetchTracksFor(id);
+  }
+
+  // ---------- Restore missing tracks ----------
+  // The first feature in this app that writes to the user's real Music.app
+  // library rather than just reading from it: for a playlist's missing
+  // tracks, an exact local-index match is auto-applied (imported into the
+  // library, added to the playlist, the broken entry removed) without
+  // asking; an ambiguous match is left here for the user to pick or skip;
+  // no local match at all gets an automatic Music.app download attempt.
+
+  async function restorePlaylistTracks(id) {
+    restoreState.set(id, { running: true, result: null, error: null });
+    renderMain();
+    try {
+      const res = await fetch(`/api/playlists/${encodeURIComponent(id)}/restore`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Restore failed");
+      restoreState.set(id, { running: false, result: data, error: null });
+    } catch (err) {
+      restoreState.set(id, { running: false, result: null, error: err.message });
+    }
+    // The playlist's contents may have changed (tracks added/removed) —
+    // force a real refetch rather than trusting the now-stale cached list.
+    trackCache.delete(id);
+    errorCache.delete(id);
+    await fetchTracksFor(id);
+    renderMain();
+  }
+
+  async function applyRestoreCandidate(playlistId, musicAppId, fileId) {
+    try {
+      const res = await fetch(`/api/playlists/${encodeURIComponent(playlistId)}/restore/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileId, trackMusicAppId: musicAppId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't apply that match");
+    } catch (err) {
+      showError("Couldn't apply that match.", err.message);
+      return;
+    }
+    dismissReviewItem(playlistId, musicAppId);
+    trackCache.delete(playlistId);
+    errorCache.delete(playlistId);
+    await fetchTracksFor(playlistId);
+    renderMain();
+  }
+
+  function dismissReviewItem(playlistId, musicAppId) {
+    const state = restoreState.get(playlistId);
+    if (state?.result) {
+      state.result.needsReview = state.result.needsReview.filter((r) => r.musicAppId !== musicAppId);
+    }
+  }
+
+  function bindRestoreButtons(container) {
+    container.querySelectorAll("[data-restore-playlist]").forEach((btn) => {
+      btn.addEventListener("click", () => restorePlaylistTracks(btn.dataset.restorePlaylist));
+    });
+    container.querySelectorAll(".restore-use-btn[data-restore-use]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        applyRestoreCandidate(btn.dataset.playlistId, btn.dataset.trackId || null, parseInt(btn.dataset.fileId, 10));
+      });
+    });
+    container.querySelectorAll(".restore-skip-btn[data-restore-skip]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        dismissReviewItem(btn.dataset.playlistId, btn.dataset.trackId || null);
+        renderMain();
+      });
+    });
+  }
+
+  function restoreResultHtml(playlistId, state) {
+    if (!state) return "";
+    if (state.running) {
+      return `<tr class="restore-status-row"><td colspan="5" class="restore-status">Restoring missing tracks…</td></tr>`;
+    }
+    if (state.error) {
+      return `<tr class="restore-status-row"><td colspan="5" class="restore-status error">Restore failed: ${escapeAttr(state.error)}</td></tr>`;
+    }
+    const r = state.result;
+    if (!r) return "";
+
+    const parts = [];
+    if (r.fixed.length) parts.push(`${r.fixed.length} fixed`);
+    if (r.downloading.length) parts.push(`${r.downloading.length} downloading via Apple Music`);
+    if (r.unsupported.length) parts.push(`${r.unsupported.length} couldn't be downloaded`);
+    if (r.needsReview.length) parts.push(`${r.needsReview.length} need your input`);
+    const summary = parts.length ? parts.join(" · ") : "No missing tracks matched locally or needed a download.";
+
+    const reviewHtml = r.needsReview
+      .map((item) => {
+        const candidateButtons = item.candidates
+          .map(
+            (c) =>
+              `<button type="button" class="link-btn restore-use-btn" data-restore-use data-playlist-id="${playlistId}" data-track-id="${escapeAttr(item.musicAppId || "")}" data-file-id="${c.id}">Use "${escapeAttr(c.title || "")}"${c.artist ? ` — ${escapeAttr(c.artist)}` : ""}</button>`
+          )
+          .join(" ");
+        return `
+        <div class="restore-review-item">
+          <span class="restore-review-title">${item.title || "(untitled)"}<span class="restore-review-artist">${item.artist || ""}</span></span>
+          <span class="restore-review-candidates">
+            ${candidateButtons}
+            <button type="button" class="link-btn restore-skip-btn" data-restore-skip data-playlist-id="${playlistId}" data-track-id="${escapeAttr(item.musicAppId || "")}">Skip</button>
+          </span>
+        </div>`;
+      })
+      .join("");
+
+    const unsupportedHtml = r.unsupported
+      .map((item) => `<div class="restore-unsupported-item">${item.title || "(untitled)"} — ${escapeAttr(item.reason || "couldn't download")}</div>`)
+      .join("");
+
+    return `<tr class="restore-status-row"><td colspan="5">
+      <div class="restore-summary">${summary}</div>
+      ${reviewHtml ? `<div class="restore-review-list">${reviewHtml}</div>` : ""}
+      ${unsupportedHtml ? `<div class="restore-unsupported-list">${unsupportedHtml}</div>` : ""}
+    </td></tr>`;
   }
 
   /** Every 20s, quietly retries anything still in errorCache — playlists that
@@ -522,7 +642,14 @@
           </tr>`
           )
           .join("");
-        return `<tr class="group-row"><td colspan="5">${p.name} <span class="group-count">— ${pc.ready} of ${pc.total} exportable</span></td></tr>${rows}`;
+        const restoreBtnState = restoreState.get(p.id);
+        const restoreBtnHtml =
+          pc.missing > 0
+            ? `<button type="button" class="restore-btn" data-restore-playlist="${p.id}" ${restoreBtnState?.running ? "disabled" : ""}>${
+                restoreBtnState?.running ? "Restoring…" : `Restore missing tracks (${pc.missing})`
+              }</button>`
+            : "";
+        return `<tr class="group-row"><td colspan="5">${p.name} <span class="group-count">— ${pc.ready} of ${pc.total} exportable</span>${restoreBtnHtml}</td></tr>${rows}${restoreResultHtml(p.id, restoreBtnState)}`;
       })
       .join("");
 
@@ -531,6 +658,7 @@
     });
     bindPlayButtons(trackBodyEl);
     bindRevealButtons(trackBodyEl);
+    bindRestoreButtons(trackBodyEl);
 
     const settled = selected.length - loaded.length - errored.length === 0;
     const stillLoading = !settled;

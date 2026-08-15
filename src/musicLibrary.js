@@ -137,6 +137,11 @@ async function getPlaylistTracksUncached(playlistId) {
   // "shared track"s (Apple Music tracks not downloaded locally). Bulk
   // "property of every track" fails outright on such mixed-class lists, so
   // each track's properties are fetched individually and defensively.
+  //
+  // Also captures each entry's `id` (Music.app's persistent id for this
+  // specific playlist entry, not just its transient position) — needed by
+  // removeTrackFromPlaylist/attemptDownload below, since a position becomes
+  // stale the moment any entry before it is removed.
   const script = `
 tell application "Music"
   set thePlaylist to (first playlist whose id is ${numericId})
@@ -145,6 +150,10 @@ tell application "Music"
   set i to 0
   repeat with t in theTracks
     set i to i + 1
+    set theId to ""
+    try
+      set theId to (id of t as string)
+    end try
     set theName to ""
     try
       set theName to (name of t)
@@ -166,7 +175,7 @@ tell application "Music"
       set theAlias to location of t
       set theLoc to POSIX path of theAlias
     end try
-    set output to output & i & "${FS}" & theName & "${FS}" & theArtist & "${FS}" & theAlbum & "${FS}" & theKind & "${FS}" & theLoc & "${RS}"
+    set output to output & i & "${FS}" & theId & "${FS}" & theName & "${FS}" & theArtist & "${FS}" & theAlbum & "${FS}" & theKind & "${FS}" & theLoc & "${RS}"
   end repeat
   return output
 end tell
@@ -176,9 +185,10 @@ end tell
     .split(RS)
     .filter((line) => line.trim().length > 0)
     .map((line) => {
-      const [pos, title, artist, album, kind, location] = line.split(FS);
+      const [pos, musicAppId, title, artist, album, kind, location] = line.split(FS);
       return {
         position: parseInt(pos, 10),
+        musicAppId: musicAppId || null,
         title,
         artist,
         album,
@@ -188,4 +198,74 @@ end tell
     });
 }
 
-module.exports = { listPlaylists, getPlaylistTracks };
+// Embeds an arbitrary string (a filesystem path, in practice) into an
+// AppleScript double-quoted literal — escapes backslashes and quotes so a
+// path containing either can't break out of the literal or corrupt the script.
+function escapeAppleScriptString(str) {
+  return String(str).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/**
+ * Imports a local file into the user's Music library and adds it to the
+ * given playlist in one step — Music.app's `add` command does both. This is
+ * the first write path into the user's real Music library this module has
+ * ever had; only ever called for a file the caller has already independently
+ * confirmed exists on disk.
+ */
+async function addFileToPlaylist(playlistId, filePath) {
+  const numericId = parseInt(playlistId, 10);
+  if (!Number.isFinite(numericId)) throw new Error(`Invalid playlist id: ${playlistId}`);
+  const script = `
+tell application "Music"
+  set thePlaylist to (first playlist whose id is ${numericId})
+  add (POSIX file "${escapeAppleScriptString(filePath)}") to thePlaylist
+end tell
+`;
+  await runAppleScript(script);
+}
+
+/**
+ * Removes one specific entry from a playlist, addressed by the persistent
+ * per-entry id captured in getPlaylistTracks (never by position — positions
+ * shift as soon as any earlier entry is removed).
+ */
+async function removeTrackFromPlaylist(playlistId, musicAppTrackId) {
+  const numericPlaylistId = parseInt(playlistId, 10);
+  if (!Number.isFinite(numericPlaylistId)) throw new Error(`Invalid playlist id: ${playlistId}`);
+  if (!musicAppTrackId) throw new Error("Missing track id");
+  const script = `
+tell application "Music"
+  set thePlaylist to (first playlist whose id is ${numericPlaylistId})
+  delete (some track of thePlaylist whose id is ${parseInt(musicAppTrackId, 10)})
+end tell
+`;
+  await runAppleScript(script);
+}
+
+/**
+ * Sends Music.app's `download` command for one cloud/matched track that has
+ * no local file yet. NOT verified to work on every macOS/Music.app version —
+ * callers should treat a thrown error here as "download isn't supported on
+ * this setup" rather than a transient failure worth retrying.
+ */
+async function attemptDownload(playlistId, musicAppTrackId) {
+  const numericPlaylistId = parseInt(playlistId, 10);
+  if (!Number.isFinite(numericPlaylistId)) throw new Error(`Invalid playlist id: ${playlistId}`);
+  if (!musicAppTrackId) throw new Error("Missing track id");
+  const script = `
+tell application "Music"
+  set thePlaylist to (first playlist whose id is ${numericPlaylistId})
+  set theTrack to (some track of thePlaylist whose id is ${parseInt(musicAppTrackId, 10)})
+  download theTrack
+end tell
+`;
+  await runAppleScript(script);
+}
+
+module.exports = {
+  listPlaylists,
+  getPlaylistTracks,
+  addFileToPlaylist,
+  removeTrackFromPlaylist,
+  attemptDownload,
+};

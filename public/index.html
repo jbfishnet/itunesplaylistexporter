@@ -12,6 +12,7 @@
       <div class="brand">
         <span class="brand-mark">Playlist Exporter</span>
         <span class="brand-sub">Music.app → Memory Card</span>
+        <span class="brand-version" id="brandVersion" title=""></span>
       </div>
       <div class="nas-status" id="nasStatus">
         <span class="dot"></span>
@@ -197,6 +198,10 @@
       <div class="main-inner search-inner">
         <div class="stat-strip" id="queueStatStrip"></div>
         <p class="library-meta" id="queueMeta">Loading…</p>
+        <p class="library-meta" id="queueWriteFailures" style="display: none;">
+          <span id="queueWriteFailuresText"></span>
+          <button type="button" class="btn" id="queueRetryWritesBtn">Retry failed writes</button>
+        </p>
 
         <div class="table-card">
           <div class="table-scroll">
@@ -276,8 +281,11 @@
           <button class="link-btn" id="dupNextBtn">Next →</button>
         </div>
 
-        <div class="dup-section-head">Similar Titles <span class="dup-section-sub">same title, something's different — could be a real duplicate or just a different version; nothing here can be deleted directly</span></div>
-        <p class="library-meta" id="similarMeta">Loading…</p>
+        <div class="dup-section-head">Similar Titles <span class="dup-section-sub">same title, something's different — could be a real duplicate or just a different version; the copy under /Volumes/jb/iTunes4TB/iTunes Media/Music is always kept</span></div>
+        <div class="dup-summary">
+          <button class="btn-danger" id="similarDeleteAllBtn">Delete All Non-Canonical Copies</button>
+          <span class="library-meta" id="similarMeta" style="margin-left:auto">Loading…</span>
+        </div>
 
         <div id="similarGroups" style="display:flex;flex-direction:column;gap:14px;"></div>
 
@@ -307,6 +315,7 @@
   </div>
 
   <script src="audioPlayer.js"></script>
+  <script src="appVersion.js"></script>
   <script src="app.js"></script>
   <script src="librarySearch.js"></script>
   <script src="libraryBrowse.js"></script>

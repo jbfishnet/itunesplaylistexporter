@@ -60,6 +60,15 @@ function migrate(db) {
   if (!columns.has("hash_status")) {
     db.exec("ALTER TABLE files ADD COLUMN hash_status TEXT NOT NULL DEFAULT 'pending'");
   }
+  // Tracks whether an enrichment result was actually persisted into the
+  // file's own tags on disk, separately from enrichment_status (which only
+  // tracks whether the *lookup* succeeded) — see enrichmentQueue.js. A file
+  // can be 'enriched' (the DB/search index has the right metadata) while its
+  // tag_write_status is still 'failed' (the file itself doesn't yet), and
+  // that gap is exactly what /api/library/retry-tag-writes exists to close.
+  if (!columns.has("tag_write_status")) {
+    db.exec("ALTER TABLE files ADD COLUMN tag_write_status TEXT NOT NULL DEFAULT 'pending'");
+  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_size ON files(size)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_files_content_hash ON files(content_hash)");
 }
@@ -154,6 +163,7 @@ function openLibraryDb(dbPath) {
     `),
     countAll: db.prepare("SELECT COUNT(*) AS n FROM files"),
     countByEnrichment: db.prepare("SELECT enrichment_status, COUNT(*) AS n FROM files GROUP BY enrichment_status"),
+    countByTagWriteStatus: db.prepare("SELECT tag_write_status, COUNT(*) AS n FROM files GROUP BY tag_write_status"),
     enrichmentBacklog: db.prepare(
       "SELECT id, path, title, artist, album, genre, year, extension, protected FROM files WHERE enrichment_status = 'pending' ORDER BY id ASC LIMIT ?"
     ),
@@ -163,6 +173,10 @@ function openLibraryDb(dbPath) {
     `),
     markStatus: db.prepare("UPDATE files SET enrichment_status = ?, updated_at = ? WHERE id = ?"),
     requeueNotFound: db.prepare("UPDATE files SET enrichment_status = 'pending', updated_at = ? WHERE enrichment_status = 'not_found'"),
+    setTagWriteStatus: db.prepare("UPDATE files SET tag_write_status = ?, updated_at = ? WHERE id = ?"),
+    tagWriteFailures: db.prepare(
+      "SELECT id, path, title, artist, album, genre, year, extension, protected FROM files WHERE tag_write_status = 'failed' ORDER BY id ASC LIMIT ?"
+    ),
     getById: db.prepare("SELECT * FROM files WHERE id = ?"),
     setMeta: db.prepare("INSERT INTO scan_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"),
     getMeta: db.prepare("SELECT value FROM scan_meta WHERE key = ?"),
@@ -299,9 +313,12 @@ function openLibraryDb(dbPath) {
     const total = stmts.countAll.get().n;
     const byStatus = {};
     for (const row of stmts.countByEnrichment.all()) byStatus[row.enrichment_status] = row.n;
+    const byTagWriteStatus = {};
+    for (const row of stmts.countByTagWriteStatus.all()) byTagWriteStatus[row.tag_write_status] = row.n;
     const value = {
       totalFiles: total,
       enrichmentCounts: byStatus,
+      tagWriteCounts: byTagWriteStatus,
       lastScanStartedAt: stmts.getMeta.get("last_scan_started_at")?.value || null,
       lastScanFinishedAt: stmts.getMeta.get("last_scan_finished_at")?.value || null,
       lastScanResult: stmts.getMeta.get("last_scan_result")?.value || null,
@@ -312,6 +329,20 @@ function openLibraryDb(dbPath) {
 
   function getEnrichmentBacklog(limit = 1) {
     return stmts.enrichmentBacklog.all(limit);
+  }
+
+  function setTagWriteStatus(id, status) {
+    invalidateAggregateCaches();
+    stmts.setTagWriteStatus.run(status, Date.now(), id);
+  }
+
+  /** Files whose enrichment lookup succeeded but the on-disk write didn't
+   * (ffmpeg missing, a permissions error, the NAS hiccupping mid-write, ...)
+   * — see /api/library/retry-tag-writes, which re-attempts these against the
+   * file's *current* on-disk tags rather than blindly retrying, in case
+   * something about the file changed since the failed attempt. */
+  function getTagWriteFailures(limit = 200) {
+    return stmts.tagWriteFailures.all(limit);
   }
 
   function markEnriched(id, tags) {
@@ -460,6 +491,31 @@ function openLibraryDb(dbPath) {
     return { total: qualifying.length, groups: qualifying.slice(offset, offset + limit) };
   }
 
+  // The one file in a similar-titles group that deletion must never touch —
+  // prefer whichever copy lives under the user's canonical archive path, and
+  // fall back to the oldest-indexed row (same rule Exact Duplicates already
+  // uses) when nothing in the group is under that path.
+  const PROTECTED_KEEP_PATH_PREFIX = "/Volumes/jb/iTunes4TB/iTunes Media/Music";
+
+  function resolveKeeperId(rows) {
+    const protectedRow = rows.find((r) => r.path.startsWith(PROTECTED_KEEP_PATH_PREFIX));
+    if (protectedRow) return protectedRow.id;
+    return rows.reduce((oldest, r) => (r.id < oldest.id ? r : oldest)).id;
+  }
+
+  /** Safety guard for Similar Titles deletion, mirroring isPartOfDuplicateGroup
+   * above: re-derives the keeper from the *current* DB state on every call —
+   * never trusts a client-supplied "this is safe to delete" claim. Refuses
+   * for the keeper itself and for any file whose title no longer has 2+
+   * members (already resolved, or never qualified). */
+  function isDeletableSimilarFile(id) {
+    const row = stmts.getById.get(id);
+    if (!row || !row.title) return false;
+    const rows = preparedFor("SELECT * FROM files WHERE title = ? COLLATE NOCASE ORDER BY id ASC").all(row.title);
+    if (rows.length < 2) return false;
+    return resolveKeeperId(rows) !== id;
+  }
+
   const BROWSE_SORT_COLUMNS = new Set([
     "id", "title", "artist", "album", "genre", "year", "extension", "enrichment_status", "updated_at", "enriched_at",
   ]);
@@ -590,6 +646,8 @@ function openLibraryDb(dbPath) {
     markEnriched,
     markNotFound,
     requeueNotFound,
+    setTagWriteStatus,
+    getTagWriteFailures,
     setMeta,
     getMeta,
     getLibraryRoots,
@@ -602,6 +660,7 @@ function openLibraryDb(dbPath) {
     isPartOfDuplicateGroup,
     deleteFileRow,
     getSimilarTitleGroups,
+    isDeletableSimilarFile,
     getIdByPath: (p) => stmts.getIdByPath.get(p)?.id ?? null,
     getFileByPath: (p) => stmts.getFileByPath.get(p),
     getById: (id) => stmts.getById.get(id),

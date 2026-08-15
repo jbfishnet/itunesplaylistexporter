@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
 const NodeID3 = require("node-id3");
+const { isPlaceholderAlbum } = require("./metadataPlaceholders");
 
 // Only formats with a well-supported, safe writer here. .m4p is DRM and must
 // never be touched (also excluded by the `protected` check below, but this
@@ -11,14 +12,16 @@ const WRITABLE_EXTENSIONS = new Set(["mp3", "m4a"]);
 
 const FIELDS = ["title", "artist", "album", "genre", "year"];
 
-/** Only the fields that are currently empty on the row *and* present in the
- * new tags — this is the entire safety mechanism: a field with any existing
- * value, correct or not, is never touched. */
+/** Only the fields that are currently empty (or, for album, a recognized
+ * placeholder like "Unknown Album" — see metadataPlaceholders.js) *and*
+ * present in the new tags — this is the entire safety mechanism: a field
+ * with any other existing value, correct or not, is never touched. */
 function fieldsToFill(row, newTags) {
   const fields = {};
   for (const key of FIELDS) {
     const existing = row[key];
-    const isEmpty = existing === null || existing === undefined || String(existing).trim() === "";
+    let isEmpty = existing === null || existing === undefined || String(existing).trim() === "";
+    if (!isEmpty && key === "album" && isPlaceholderAlbum(existing)) isEmpty = true;
     if (isEmpty && newTags[key] !== null && newTags[key] !== undefined && String(newTags[key]).trim() !== "") {
       fields[key] = newTags[key];
     }
