@@ -44,6 +44,12 @@ const tagWriter = require("./src/tagWriter");
 const fileTrash = process.env.PLE_TEST_FILE_TRASH
   ? require(path.resolve(process.env.PLE_TEST_FILE_TRASH))
   : require("./src/fileTrash");
+// Swappable only for tests, same reasoning as the two above: the real module
+// calls the Anthropic API, which needs a configured ANTHROPIC_API_KEY and
+// real network access neither of which a CI test run has.
+const llmMetadataExtractor = process.env.PLE_TEST_LLM_EXTRACTOR
+  ? require(path.resolve(process.env.PLE_TEST_LLM_EXTRACTOR))
+  : require("./src/llmMetadataExtractor");
 const { openLibraryDb } = require("./src/libraryDb");
 const { createScheduler } = require("./src/libraryScheduler");
 const { createEnrichmentQueue } = require("./src/enrichmentQueue");
@@ -934,6 +940,106 @@ app.post("/api/library/not-found-files/manual-metadata", async (req, res) => {
   }
 
   res.json({ results, appliedFields: Object.keys(fields), requeued: results.filter((r) => r.ok).length });
+});
+
+// Single-file AI guess (Not Found tab's "✨" button) — asks Claude to read
+// the filename alone and propose title/artist/album/genre/year. Never
+// writes anything; the client opens the existing manual-metadata edit modal
+// pre-filled with the suggestion so the user reviews (and can freely edit)
+// before it's actually saved via the manual-metadata route above. This is
+// the "ask the user to verify" path for either confidence level.
+app.post("/api/library/not-found-files/:id/guess-metadata", async (req, res) => {
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid file id" });
+
+  const row = libraryDb.getById(id);
+  if (!row) return res.status(404).json({ error: "File not found in the index" });
+  if (row.enrichment_status !== "not_found") {
+    return res.status(409).json({ error: "This file is no longer in the Not Found list — refresh and try again" });
+  }
+
+  let guess;
+  try {
+    guess = await llmMetadataExtractor.extractMetadataFromFilename(row.path);
+  } catch (err) {
+    return res.status(502).json({ error: err.message });
+  }
+  if (!guess.ok) {
+    return res.status(guess.error === "not_configured" ? 503 : 502).json({ error: guess.errorMessage });
+  }
+  res.json({ suggestion: guess.suggestion });
+});
+
+// Bulk AI guess (Not Found tab's "Guess Metadata" button on a multiselect) —
+// runs one filename-guess per selected track. A "high" confidence guess is
+// applied immediately (same write path as manual-metadata: index + file tags
+// + re-queue for another online lookup), since the user already opted in by
+// selecting these specific tracks and clicking this button. A "low"
+// confidence guess is left untouched and reported back for the user to
+// review individually via the per-track "✨" button instead — the "ask the
+// user to verify" branch for guesses this feature isn't sure about.
+app.post("/api/library/not-found-files/guess-metadata", async (req, res) => {
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v) => parseInt(v, 10)).filter(Number.isFinite) : [];
+  if (ids.length === 0) return res.status(400).json({ error: "ids is required and must be a non-empty array" });
+
+  const results = [];
+  for (const id of ids) {
+    const row = libraryDb.getById(id);
+    if (!row) {
+      results.push({ id, ok: false, error: "Not found in the index" });
+      continue;
+    }
+    if (row.enrichment_status !== "not_found") {
+      results.push({ id, ok: false, error: "No longer in the Not Found list — skipped" });
+      continue;
+    }
+
+    let guess;
+    try {
+      guess = await llmMetadataExtractor.extractMetadataFromFilename(row.path);
+    } catch (err) {
+      results.push({ id, ok: false, error: err.message });
+      continue;
+    }
+    if (!guess.ok) {
+      results.push({ id, ok: false, error: guess.errorMessage });
+      continue;
+    }
+
+    const { suggestion } = guess;
+    if (suggestion.confidence !== "high" || !suggestion.title) {
+      results.push({ id, ok: true, applied: false, suggestion });
+      continue;
+    }
+
+    const fields = {};
+    for (const key of ["title", "artist", "album", "genre"]) {
+      if (suggestion[key]) fields[key] = suggestion[key];
+    }
+    if (suggestion.year) {
+      const year = parseInt(suggestion.year, 10);
+      if (Number.isFinite(year)) fields.year = year;
+    }
+
+    libraryDb.setManualMetadata(id, fields);
+    try {
+      const writeResult = await tagWriter.writeTagsOverwrite(row, fields);
+      libraryDb.setTagWriteStatus(id, writeResult.written ? "written" : "skipped");
+      results.push({ id, ok: true, applied: true, suggestion, written: writeResult.written });
+    } catch (err) {
+      libraryDb.setTagWriteStatus(id, "failed");
+      results.push({ id, ok: true, applied: true, suggestion, written: false, writeError: err.message });
+    }
+  }
+
+  res.json({
+    results,
+    appliedCount: results.filter((r) => r.applied).length,
+    needsReviewCount: results.filter((r) => r.ok && !r.applied).length,
+  });
 });
 
 const PORT = process.env.PORT || 4173;
