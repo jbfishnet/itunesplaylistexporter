@@ -12,6 +12,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
     "express": "^4.19.2",
     "music-metadata": "^11.14.0",
     "node-id3": "^0.2.9"

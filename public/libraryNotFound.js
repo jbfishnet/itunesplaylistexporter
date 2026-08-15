@@ -18,6 +18,7 @@
   const selectedCountEl = el("notfoundSelectedCount");
   const deleteSelectedBtn = el("notfoundDeleteSelectedBtn");
   const editSelectedBtn = el("notfoundEditSelectedBtn");
+  const guessSelectedBtn = el("notfoundGuessSelectedBtn");
 
   const metadataEditOverlay = el("metadataEditOverlay");
   const metadataEditTitle = el("metadataEditTitle");
@@ -87,6 +88,10 @@
     return `<button type="button" class="reveal-btn" data-edit-id="${row.id}" title="Edit metadata">✎</button>`;
   }
 
+  function guessButtonHtml(row) {
+    return `<button type="button" class="reveal-btn" data-guess-id="${row.id}" title="Guess metadata from the filename (AI)">✨</button>`;
+  }
+
   /** Unlike the Duplicates tab's permanent delete (safe because a
    * byte-identical copy is guaranteed to exist elsewhere), a Not Found file
    * usually has no such guarantee — moved to the actual macOS Trash instead
@@ -104,6 +109,7 @@
     selectedCountEl.textContent = count > 0 ? `${count} selected` : "";
     deleteSelectedBtn.style.display = count > 0 ? "" : "none";
     editSelectedBtn.style.display = count > 0 ? "" : "none";
+    guessSelectedBtn.style.display = count > 0 ? "" : "none";
     const rowCheckboxes = resultsBody.querySelectorAll(".notfound-row-checkbox");
     selectAllEl.checked = rowCheckboxes.length > 0 && Array.from(rowCheckboxes).every((cb) => cb.checked);
     selectAllEl.indeterminate = count > 0 && !selectAllEl.checked;
@@ -186,6 +192,74 @@
     openMetadataEdit(Array.from(selectedIds), null);
   });
 
+  // ---------- Per-track AI guess (filename-only, via Claude) ----------
+  // Never writes anything on its own — it opens the same edit modal used
+  // above, pre-filled with the guess, so the user always reviews (and can
+  // freely correct) before Save & Re-check actually applies it. This is the
+  // "ask the user to verify" path regardless of how confident the guess is.
+
+  function applySuggestionToFields(suggestion) {
+    metaFieldTitle.value = suggestion.title || "";
+    metaFieldArtist.value = suggestion.artist || "";
+    metaFieldAlbum.value = suggestion.album || "";
+    metaFieldGenre.value = suggestion.genre || "";
+    metaFieldYear.value = suggestion.year || "";
+    const confidenceNote =
+      suggestion.confidence === "high" ? "AI guess (fairly confident):" : "AI guess (not very confident — double-check this):";
+    metadataEditSub.textContent = [confidenceNote, suggestion.reasoning].filter(Boolean).join(" ");
+  }
+
+  function bindGuessButtons(container, rows) {
+    container.querySelectorAll("[data-guess-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.guessId;
+        const row = rows.find((r) => String(r.id) === String(id));
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "…";
+        try {
+          const res = await fetch(`/api/library/not-found-files/${id}/guess-metadata`, { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Guess failed");
+          openMetadataEdit([id], row);
+          applySuggestionToFields(data.suggestion);
+        } catch (err) {
+          metaEl.textContent = `Couldn't guess metadata: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+    });
+  }
+
+  guessSelectedBtn.addEventListener("click", async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    guessSelectedBtn.disabled = true;
+    guessSelectedBtn.textContent = `Guessing metadata for ${ids.length} track${ids.length === 1 ? "" : "s"}…`;
+    try {
+      const res = await fetch("/api/library/not-found-files/guess-metadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Guess failed");
+      selectedIds.clear();
+      metaEl.textContent =
+        `Applied confident AI guesses to ${data.appliedCount} track${data.appliedCount === 1 ? "" : "s"} ` +
+        `(re-queued for another lookup) — ${data.needsReviewCount} need manual review, left unchanged. ` +
+        `Use the ✨ button on an individual track to review those.`;
+      loadNotFound();
+    } catch (err) {
+      metaEl.textContent = `Couldn't guess metadata: ${err.message}`;
+    } finally {
+      guessSelectedBtn.disabled = false;
+      guessSelectedBtn.textContent = "✨ Guess Metadata (AI)";
+    }
+  });
+
   metadataEditCancelBtn.addEventListener("click", closeMetadataEdit);
   metadataEditOverlay.addEventListener("click", (e) => {
     if (e.target === metadataEditOverlay) closeMetadataEdit();
@@ -261,7 +335,7 @@
           <td>${r.genre || ""}</td>
           <td class="col-format">${r.extension ? "." + r.extension : "—"}</td>
           <td class="col-format">${formatDuration(r.duration_sec)}</td>
-          <td>${editButtonHtml(r)}${deleteButtonHtml(r)}</td>
+          <td>${guessButtonHtml(r)}${editButtonHtml(r)}${deleteButtonHtml(r)}</td>
         </tr>`
         )
         .join("");
@@ -270,6 +344,7 @@
       bindRowSelection(resultsBody);
       bindDeleteButtons(resultsBody);
       bindEditButtons(resultsBody, rows);
+      bindGuessButtons(resultsBody, rows);
     }
 
     updateSelectionUI();
