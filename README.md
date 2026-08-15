@@ -85,7 +85,7 @@ copies `server.js`, `src/`, `public/`, and a clean production
 Mac it's copied to — it no longer depends on this git checkout existing
 at a fixed path. At launch it locates Node.js itself (checking common
 install locations, then the user's shell `PATH`) rather than assuming a
-specific install path, and it needs Node.js 18+ to already be installed
+specific install path, and it needs Node.js 24+ to already be installed
 on that Mac — if it can't find one, it shows an alert explaining that and
 links to nodejs.org rather than failing silently. The search index and
 logs live under that user's own `~/Library/Application Support/Playlist

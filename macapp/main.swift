@@ -126,7 +126,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSWind
         guard let nodePath = findNode() else {
             showFatalAlert(
                 title: "Node.js not found",
-                message: "Playlist Exporter needs Node.js 18 or later installed to run its "
+                message: "Playlist Exporter needs Node.js 24 or later installed to run its "
                     + "local server. Install it from nodejs.org or Homebrew, then reopen the app.",
                 helpURL: URL(string: "https://nodejs.org/")
             )
