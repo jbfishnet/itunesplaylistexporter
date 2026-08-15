@@ -28,11 +28,23 @@ const fakeLlm = require("./fixtures/fakeLlmMetadataExtractor");
 
 const BASE_URL = `http://localhost:${process.env.PORT}`;
 
+// One long-lived connection for all seeding, reused across every test and
+// closed only at the very end, rather than opening/closing a fresh one per
+// seed call.
+const seedDb = openLibraryDb(dbPath);
+
+async function waitFor(checkFn, description) {
+  for (let i = 0; i < 200; i += 1) {
+    if (await checkFn()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timed out waiting for: ${description}`);
+}
+
 function seedNotFoundFileFromFixture(destName, seedFields = {}) {
   const filePath = path.join(libraryRoot, destName);
   fs.copyFileSync(path.join(FIXTURES, "untagged.mp3"), filePath);
-  const db = openLibraryDb(dbPath);
-  const id = db.upsertFile({
+  const id = seedDb.upsertFile({
     path: filePath,
     size: fs.statSync(filePath).size,
     mtimeMs: Date.now(),
@@ -45,13 +57,29 @@ function seedNotFoundFileFromFixture(destName, seedFields = {}) {
     scanId: 1,
     ...seedFields,
   });
-  db.close();
   return { id, filePath };
 }
+
+// libraryScheduler runs one scan of PLE_LIBRARY_ROOT immediately on server
+// startup (via setImmediate — see src/libraryScheduler.js), independent of
+// its hourly timer. That scan's own completion sweep
+// (deleteFilesNotSeenInScan) removes any row not stamped with *its* scanId
+// — including rows this file seeds directly, if they're written while that
+// first scan is still in flight. Waiting for it to finish once, before any
+// seeding happens, avoids the race entirely: the scanner never runs again
+// within this file's lifetime (next run is an hour out).
+test.before(async () => {
+  await waitFor(async () => {
+    const res = await fetch(`${BASE_URL}/api/library/status`);
+    const data = await res.json();
+    return data.lastScanAt !== null;
+  }, "the startup library scan to finish");
+});
 
 test.after(() => {
   server.closeAllConnections();
   server.close();
+  seedDb.close();
   fs.rmSync(libraryRoot, { recursive: true, force: true });
   fs.rmSync(dbPath, { force: true });
 });
@@ -60,7 +88,7 @@ test.beforeEach(() => fakeLlm.__reset());
 
 test("POST .../:id/guess-metadata returns a suggestion without writing anything", async () => {
   const { id, filePath } = seedNotFoundFileFromFixture("guess1.mp3");
-  fakeLlm.__queueResult({
+  fakeLlm.__setResult("guess1.mp3", {
     ok: true,
     suggestion: { title: "Guessed Title", artist: "Guessed Artist", album: "", genre: "", year: "", confidence: "high", reasoning: "test" },
   });
@@ -73,9 +101,7 @@ test("POST .../:id/guess-metadata returns a suggestion without writing anything"
 
   // Nothing should have been written — status is still not_found, and the
   // index still has no title, since this route only surfaces a suggestion.
-  const db = openLibraryDb(dbPath);
-  const row = db.getById(id);
-  db.close();
+  const row = seedDb.getById(id);
   assert.equal(row.enrichment_status, "not_found");
   assert.equal(row.title, null);
 });
@@ -94,7 +120,7 @@ test("POST .../:id/guess-metadata 404s for an unknown id", async () => {
 
 test("POST .../:id/guess-metadata surfaces an extractor error (e.g. no API key configured) as a clean HTTP error, not a crash", async () => {
   const { id } = seedNotFoundFileFromFixture("guess3.mp3");
-  fakeLlm.__queueResult({ ok: false, error: "not_configured", errorMessage: "No ANTHROPIC_API_KEY configured" });
+  fakeLlm.__setResult("guess3.mp3", { ok: false, error: "not_configured", errorMessage: "No ANTHROPIC_API_KEY configured" });
 
   const res = await fetch(`${BASE_URL}/api/library/not-found-files/${id}/guess-metadata`, { method: "POST" });
   const data = await res.json();
@@ -106,11 +132,11 @@ test("POST .../guess-metadata (bulk): a 'high' confidence guess is auto-applied 
   const confident = seedNotFoundFileFromFixture("bulk-guess-high.mp3");
   const unsure = seedNotFoundFileFromFixture("bulk-guess-low.mp3");
 
-  fakeLlm.__queueResult({
+  fakeLlm.__setResult("bulk-guess-high.mp3", {
     ok: true,
     suggestion: { title: "Confident Title", artist: "Confident Artist", album: "", genre: "Rock", year: "2001", confidence: "high", reasoning: "clear pattern" },
   });
-  fakeLlm.__queueResult({
+  fakeLlm.__setResult("bulk-guess-low.mp3", {
     ok: true,
     suggestion: { title: "Maybe Title", artist: "", album: "", genre: "", year: "", confidence: "low", reasoning: "no clear structure" },
   });
@@ -125,19 +151,26 @@ test("POST .../guess-metadata (bulk): a 'high' confidence guess is auto-applied 
   assert.equal(data.appliedCount, 1);
   assert.equal(data.needsReviewCount, 1);
 
-  const db = openLibraryDb(dbPath);
-  const confidentRow = db.getById(confident.id);
-  const unsureRow = db.getById(unsure.id);
-  db.close();
-
-  assert.equal(confidentRow.title, "Confident Title");
+  // Verified through the same live connection the write went through (the
+  // server's own libraryDb, via its HTTP API) rather than a freshly-opened
+  // raw connection to the db file — node:sqlite's WAL mode has shown rare
+  // cross-connection visibility lag under rapid connection churn in this
+  // test file, and every other route test in this repo already reads back
+  // through /api/library/browse for exactly this reason.
+  const confidentBrowse = await fetch(`${BASE_URL}/api/library/browse?title=${encodeURIComponent("Confident Title")}`);
+  const confidentData = await confidentBrowse.json();
+  const confidentRow = confidentData.rows.find((r) => r.id === confident.id);
+  assert.ok(confidentRow, "the auto-applied guess must be findable by its new title");
   assert.equal(confidentRow.artist, "Confident Artist");
   assert.equal(confidentRow.genre, "Rock");
   assert.equal(confidentRow.year, 2001);
-  assert.equal(confidentRow.enrichment_status, "pending", "auto-applied guess must be re-queued, not left terminal");
+  assert.equal(confidentRow.enrichmentStatus, "pending", "auto-applied guess must be re-queued, not left terminal");
 
+  const unsureBrowse = await fetch(`${BASE_URL}/api/library/browse?status=not_found`);
+  const unsureData = await unsureBrowse.json();
+  const unsureRow = unsureData.rows.find((r) => r.id === unsure.id);
+  assert.ok(unsureRow, "a low-confidence guess must leave the track exactly where it was");
   assert.equal(unsureRow.title, null, "a low-confidence guess must never be written automatically");
-  assert.equal(unsureRow.enrichment_status, "not_found", "a low-confidence guess must leave the track exactly where it was");
 
   const { parseFile } = require("music-metadata");
   const onDisk = await parseFile(confident.filePath);
@@ -157,11 +190,11 @@ test("POST .../guess-metadata (bulk): one track's extractor error doesn't block 
   const ok = seedNotFoundFileFromFixture("bulk-guess-ok.mp3");
   const broken = seedNotFoundFileFromFixture("bulk-guess-broken.mp3");
 
-  fakeLlm.__queueResult({
+  fakeLlm.__setResult("bulk-guess-ok.mp3", {
     ok: true,
     suggestion: { title: "Fine Title", artist: "Fine Artist", album: "", genre: "", year: "", confidence: "high", reasoning: "" },
   });
-  fakeLlm.__queueResult(new Error("network blip"));
+  fakeLlm.__setResult("bulk-guess-broken.mp3", new Error("network blip"));
 
   const res = await fetch(`${BASE_URL}/api/library/not-found-files/guess-metadata`, {
     method: "POST",
@@ -184,7 +217,7 @@ test("POST .../guess-metadata (bulk): skips a track no longer in the Not Found l
   const stillNotFound = seedNotFoundFileFromFixture("bulk-guess-stays.mp3");
   const alreadyEnriched = seedNotFoundFileFromFixture("bulk-guess-gone.mp3", { enrichmentStatus: "skipped_had_tags" });
 
-  fakeLlm.__queueResult({
+  fakeLlm.__setResult("bulk-guess-stays.mp3", {
     ok: true,
     suggestion: { title: "Whatever", artist: "Whoever", album: "", genre: "", year: "", confidence: "high", reasoning: "" },
   });
