@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Development &amp; CI — Playlist Exporter Docs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar">
+      <a class="brand" href="index.html"><span class="brand-mark">Playlist Exporter</span></a>
+      <p class="brand-sub">Docs</p>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="playlists.html">Playlists &amp; Restore</a></li>
+        <li><a href="search.html">Search &amp; Enrichment</a></li>
+        <li><a href="duplicates.html">Duplicates</a></li>
+        <li><a href="native-app.html">Native macOS App</a></li>
+        <li><a href="development.html" class="active">Development &amp; CI</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <a href="https://github.com/jbfishnet/itunesplaylistexporter">Source on GitHub ↗</a>
+      </div>
+    </nav>
+    <main>
+      <h1>Development &amp; CI</h1>
+      <p class="page-sub">How this project is tested, built, and released.</p>
+
+      <h2>Local setup</h2>
+      <pre><code>npm install
+npm start</code></pre>
+      <p>Opens <code>http://localhost:4173</code>. Requires <strong>Node.js 24+</strong> (the library index uses the built-in <code>node:sqlite</code> module, unavailable on older Node).</p>
+
+      <h2>Tests</h2>
+      <pre><code>npm test</code></pre>
+      <p>
+        Node's built-in test runner (<code>node --test</code>), no separate test
+        framework. The one write path into a real Music.app library (restore) is
+        tested against a fake <code>musicLibrary</code> implementation
+        (<code>test/fixtures/fakeMusicLibrary.js</code>, swapped in via
+        <code>PLE_TEST_MUSIC_LIBRARY</code>) rather than a live app, since that can't
+        run in CI.
+      </p>
+
+      <h2>Continuous integration</h2>
+      <p>
+        <code>.github/workflows/ci.yml</code> runs on every push and PR to
+        <code>main</code>, on a <code>macos-latest</code> runner (needed to compile the
+        Swift native app, and to genuinely represent the target platform):
+      </p>
+      <ol>
+        <li>Install Node 24 and ffmpeg (the M4A tag-writer's test shells out to it directly)</li>
+        <li>Install dependencies (<code>npm ci</code>) and run the full test suite</li>
+        <li>Read the version from <code>package.json</code></li>
+        <li>Build the native macOS app (<code>macapp/build.sh</code>)</li>
+        <li>Upload it as a build artifact, named <code>Playlist Exporter-vX.Y.Z</code></li>
+      </ol>
+      <p>
+        The <strong>Test and build macOS app</strong> check is a required status check
+        on <code>main</code> — a PR can't merge with failing tests or a broken build.
+      </p>
+
+      <h2>Versioning policy</h2>
+      <p>
+        <code>package.json</code>'s <code>version</code> is the single source of truth
+        (plain <a href="https://semver.org/">semver</a>). Bump it in the same
+        commit/PR as the change it belongs to — everything else (web UI, native app's
+        <code>Info.plist</code>, CI artifact name) picks it up automatically. There's
+        no enforced bump-on-every-PR check; for a single-developer local tool that's
+        more process than it's worth.
+      </p>
+
+      <h2>Branch protection</h2>
+      <p>
+        <code>main</code> requires the CI status check to pass before merging, and
+        blocks force-pushes and deletions. (GitHub's branch protection isn't available
+        on a private repo without a paid plan — this repo is public specifically to
+        enable it.)
+      </p>
+    </main>
+  </div>
+</body>
+</html>

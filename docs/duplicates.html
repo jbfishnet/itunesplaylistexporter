@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Duplicates — Playlist Exporter Docs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar">
+      <a class="brand" href="index.html"><span class="brand-mark">Playlist Exporter</span></a>
+      <p class="brand-sub">Docs</p>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="playlists.html">Playlists &amp; Restore</a></li>
+        <li><a href="search.html">Search &amp; Enrichment</a></li>
+        <li><a href="duplicates.html" class="active">Duplicates</a></li>
+        <li><a href="native-app.html">Native macOS App</a></li>
+        <li><a href="development.html">Development &amp; CI</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <a href="https://github.com/jbfishnet/itunesplaylistexporter">Source on GitHub ↗</a>
+      </div>
+    </nav>
+    <main>
+      <h1>Duplicates</h1>
+      <p class="page-sub">Built on the same index as Search — two sections, two different safety rules.</p>
+
+      <h2>Exact Duplicates</h2>
+      <p>
+        Files that are byte-identical (same content hash). Always safe to delete: one
+        copy per group is kept (whichever was indexed first), and the rest can be
+        deleted individually or all at once.
+      </p>
+
+      <h2>Similar Titles</h2>
+      <p>
+        Files that share a title but differ in some other way (artist, album, format,
+        size, …) — not confirmed identical, so this could be a real duplicate or a
+        genuinely different recording (a live version, a cover, a remix).
+      </p>
+      <div class="callout callout-note">
+        <p>
+          Deletion here follows one hard rule: <strong>a copy under the canonical NAS
+          archive path is never deleted</strong> — it's always the one kept. If a group
+          has no copy under that path, the oldest-indexed copy is kept instead. The
+          server re-derives and enforces this on every delete request regardless of
+          what the client sends, so a stale or racing UI state can never delete the
+          protected copy.
+        </p>
+      </div>
+      <p>
+        Deletes in this section fire immediately (no confirmation dialog), per-file,
+        per-group ("Delete other copies"), or for every group at once ("Delete All
+        Non-Canonical Copies").
+      </p>
+
+      <div class="callout callout-warning">
+        <p>
+          Both sections delete the file from disk <strong>permanently</strong> (not to
+          the Trash) and remove it from the index — this can't be undone.
+        </p>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

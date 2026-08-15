@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Playlist Exporter — Documentation</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar">
+      <a class="brand" href="index.html"><span class="brand-mark">Playlist Exporter</span></a>
+      <p class="brand-sub">Docs</p>
+      <ul>
+        <li><a href="index.html" class="active">Overview</a></li>
+        <li><a href="playlists.html">Playlists &amp; Restore</a></li>
+        <li><a href="search.html">Search &amp; Enrichment</a></li>
+        <li><a href="duplicates.html">Duplicates</a></li>
+        <li><a href="native-app.html">Native macOS App</a></li>
+        <li><a href="development.html">Development &amp; CI</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <a href="https://github.com/jbfishnet/itunesplaylistexporter">Source on GitHub ↗</a>
+      </div>
+    </nav>
+    <main>
+      <h1>Playlist Exporter</h1>
+      <p class="page-sub">
+        A local macOS app for getting Music.app playlists onto a memory card in the right
+        order, plus a searchable offline index of a much larger NAS archive independent of
+        Music.app. No Apple Developer account, no cloud service — everything runs on your
+        own Mac against your own files.
+      </p>
+
+      <div class="callout callout-note">
+        <p>
+          This site documents what's built and how it behaves, including known
+          limitations — not just the happy path. If a feature has a caveat, it's
+          called out on that feature's page, not buried in a changelog.
+        </p>
+      </div>
+
+      <h2>Features</h2>
+      <div class="feature-grid">
+        <a class="feature-card" href="playlists.html">
+          <div class="fc-title">Playlists → Memory Card</div>
+          <div class="fc-desc">Export Music.app playlists to a plain folder structure, numbered for car head units. Skips DRM and missing tracks with a visible reason.</div>
+        </a>
+        <a class="feature-card" href="playlists.html#restore">
+          <div class="fc-title">Restore Missing Tracks</div>
+          <div class="fc-desc">Matches a playlist's missing tracks against your NAS index and re-attaches them automatically — with a known ordering limitation.</div>
+        </a>
+        <a class="feature-card" href="search.html">
+          <div class="fc-title">Search / Library Index</div>
+          <div class="fc-desc">Full-text search across a raw filesystem scan of your NAS archive, independent of Music.app.</div>
+        </a>
+        <a class="feature-card" href="search.html#enrichment">
+          <div class="fc-title">Metadata Enrichment</div>
+          <div class="fc-desc">Background lookups against Apple's iTunes Search API fill in missing tags and write them back into the actual files — permanently.</div>
+        </a>
+        <a class="feature-card" href="duplicates.html">
+          <div class="fc-title">Duplicates</div>
+          <div class="fc-desc">Byte-identical and same-title duplicate detection across your archive, with safe, rule-based cleanup.</div>
+        </a>
+        <a class="feature-card" href="native-app.html">
+          <div class="fc-title">Native macOS App</div>
+          <div class="fc-desc">A real Dock-icon app (Swift + WKWebView) around the same local server — self-contained, relocatable, with a proper menu bar.</div>
+        </a>
+      </div>
+
+      <h2>How it's built</h2>
+      <p>
+        A local Node.js/Express server (<code>server.js</code>) plus a plain browser UI —
+        no framework, no build step. Two independent data sources feed it:
+      </p>
+      <ul>
+        <li><strong>Music.app itself</strong>, via AppleScript (<code>osascript</code>) — the Playlists tab.</li>
+        <li><strong>A raw filesystem crawl</strong> of a NAS archive, stored in a local SQLite index — the Search, Library Index, Queue, Not Found, and Duplicates tabs.</li>
+      </ul>
+      <p>
+        See <a href="development.html">Development &amp; CI</a> for how it's tested, versioned, and built.
+      </p>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Native macOS App — Playlist Exporter Docs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar">
+      <a class="brand" href="index.html"><span class="brand-mark">Playlist Exporter</span></a>
+      <p class="brand-sub">Docs</p>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="playlists.html">Playlists &amp; Restore</a></li>
+        <li><a href="search.html">Search &amp; Enrichment</a></li>
+        <li><a href="duplicates.html">Duplicates</a></li>
+        <li><a href="native-app.html" class="active">Native macOS App</a></li>
+        <li><a href="development.html">Development &amp; CI</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <a href="https://github.com/jbfishnet/itunesplaylistexporter">Source on GitHub ↗</a>
+      </div>
+    </nav>
+    <main>
+      <h1>Native macOS App</h1>
+      <p class="page-sub">A real Dock-icon app around the same local server — Swift + WKWebView, no browser tab.</p>
+
+      <h2>What it is</h2>
+      <p>
+        <code>macapp/main.swift</code> is a thin native window: a plain
+        <code>WKWebView</code> with no browser chrome, pointed at the same local
+        Express server everything else runs on. Opening it starts <code>server.js</code>
+        automatically if it isn't already running; closing or quitting the app leaves
+        the server process running in the background, so the next launch is instant.
+      </p>
+      <p>Build and install it:</p>
+      <pre><code>cd macapp
+./build.sh
+cp -R "dist/Playlist Exporter.app" /Applications/</code></pre>
+
+      <h2>Menu bar</h2>
+      <p>
+        AppKit builds no menu bar at all without a storyboard/nib — early versions of
+        this app had none, meaning no <kbd>Cmd+Q</kbd>, no <kbd>Cmd+W</kbd>, no
+        <kbd>Cmd+C</kbd>/<kbd>Cmd+V</kbd> in the web UI's text fields. It now has a
+        real App menu (About/Hide/Quit), Edit menu (Cut/Copy/Paste/Select All), and
+        Window menu (Minimize/Zoom/Close), built in code in
+        <code>buildMainMenu()</code>.
+      </p>
+
+      <h2>Redistributable, not tied to one machine</h2>
+      <p>
+        The app used to hard-code this developer's own repo checkout path and
+        Homebrew Node path — it only ever worked on the machine it was built on.
+        It's now fully self-contained:
+      </p>
+      <ul>
+        <li><code>build.sh</code> copies <code>server.js</code>, <code>src/</code>, <code>public/</code>, and a clean production <code>node_modules</code> directly into <code>Contents/Resources/app</code> — the <code>.app</code> carries its own server instead of pointing at a git checkout.</li>
+        <li>Node.js is located at launch (common install paths, then the user's shell <code>PATH</code>) instead of a hard-coded path. If none is found, an alert explains that and links to nodejs.org rather than failing silently.</li>
+        <li>The search index and logs live under <code>~/Library/Application Support/Playlist Exporter</code> and <code>~/Library/Logs/Playlist Exporter</code> — the app bundle itself isn't writable once installed.</li>
+      </ul>
+
+      <h2>Optional autostart</h2>
+      <p>
+        <code>macapp/install-autostart.sh</code> installs a LaunchAgent that runs the
+        server headlessly at every login (<code>uninstall-autostart.sh</code> removes
+        it). It generates its plist from the actually-installed app and the current
+        user's discovered Node path at install time — never a static, machine-specific
+        file — so it's portable the same way the app itself is. The app window works
+        fine with or without this; it just skips the cold-start delay when the
+        LaunchAgent is already running.
+      </p>
+
+      <div class="callout callout-limitation">
+        <p><span class="badge badge-limitation">Known limitation</span></p>
+        <p>
+          The app is only <strong>ad-hoc signed</strong> — no Apple Developer account.
+          Gatekeeper blocks ad-hoc-signed apps downloaded from the internet on any Mac
+          other than the one that built them ("app is damaged and can't be opened"),
+          until the person opening it either right-clicks it and chooses
+          <strong>Open</strong> the first time, or runs <code>xattr -cr "/Applications/Playlist
+          Exporter.app"</code> once after copying it over. Removing that friction for
+          real requires enrolling in the Apple Developer Program (paid) and notarizing
+          each build — not set up here, since it's a cost/account decision rather than
+          a code one.
+        </p>
+      </div>
+
+      <h2>Versioning</h2>
+      <p>
+        <code>package.json</code>'s <code>version</code> field is the single source of
+        truth — nowhere else hard-codes a version number. It shows up in three places:
+      </p>
+      <ul>
+        <li>The web UI, next to the app name, fetched live from <code>GET /api/app-info</code>.</li>
+        <li>The native app's <code>Info.plist</code> (<code>CFBundleVersion</code>/<code>CFBundleShortVersionString</code>) — <strong>About Playlist Exporter</strong> and Finder's <strong>Get Info</strong> show it for free.</li>
+        <li>The CI build artifact's name (<code>Playlist Exporter-vX.Y.Z</code>).</li>
+      </ul>
+    </main>
+  </div>
+</body>
+</html>

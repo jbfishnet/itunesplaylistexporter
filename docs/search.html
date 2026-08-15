@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Search &amp; Enrichment — Playlist Exporter Docs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar">
+      <a class="brand" href="index.html"><span class="brand-mark">Playlist Exporter</span></a>
+      <p class="brand-sub">Docs</p>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="playlists.html">Playlists &amp; Restore</a></li>
+        <li><a href="search.html" class="active">Search &amp; Enrichment</a></li>
+        <li><a href="duplicates.html">Duplicates</a></li>
+        <li><a href="native-app.html">Native macOS App</a></li>
+        <li><a href="development.html">Development &amp; CI</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <a href="https://github.com/jbfishnet/itunesplaylistexporter">Source on GitHub ↗</a>
+      </div>
+    </nav>
+    <main>
+      <h1>Search &amp; Enrichment</h1>
+      <p class="page-sub">A searchable offline index of a whole NAS music archive, independent of Music.app.</p>
+
+      <h2>Indexing</h2>
+      <p>
+        On startup, and then every hour, the app walks the configured library root(s)
+        (<code>PLE_LIBRARY_ROOT</code>) directly on disk — no Music.app involved —
+        reading embedded tags (ID3/MP4/FLAC/etc.) from every audio file it finds.
+        Rescans are incremental: only new or changed files are re-read, so only the
+        first scan of a large archive is slow. If a NAS root isn't mounted when a scan
+        runs, the existing index is left untouched rather than wiped.
+      </p>
+      <p>
+        The index lives in a local SQLite database (with FTS5 for full-text search),
+        stored per-install under <code>~/Library/Application Support/Playlist
+        Exporter/</code> for the native app.
+      </p>
+
+      <h2>Search</h2>
+      <p>
+        Full-text search across title/artist/album/genre, and always the
+        filename/folder too — so even a completely untagged file is still findable.
+      </p>
+
+      <h2 id="enrichment">Metadata enrichment</h2>
+      <p>
+        Files with missing or placeholder tags (no artist, no genre, an album
+        literally called "Unknown Album", etc.) are queued for a background lookup
+        against Apple's iTunes Search API — no signup or API key needed. This runs
+        slowly and continuously (roughly one lookup every 1.75s) so it never hammers
+        Apple's servers; a large backlog just drains gradually in the background.
+        Well-tagged files are never looked up at all.
+      </p>
+      <p>
+        A match is <strong>written back into the file's own tags on disk</strong> —
+        MP3 via ID3, M4A via a lossless ffmpeg remux — never overwriting a field that
+        already has a real value, only filling in what was actually missing or a
+        recognized placeholder. That's what makes it permanent: a reindex never needs
+        to re-enrich the same file twice, because the fix lives in the file, not just
+        the database.
+      </p>
+      <div class="callout callout-note">
+        <p>
+          <strong>This wasn't always reliable.</strong> A real bug meant a file whose
+          only gap was a placeholder album (e.g. literally "Unknown Album") never
+          actually got fixed on disk, because the tag-writer's "is this field empty"
+          check didn't recognize placeholder text the same way the scanner's
+          "does this need enrichment" check did — so the same ~3,700 files kept
+          getting re-flagged on every scan. Both checks now share one definition
+          (<code>src/metadataPlaceholders.js</code>) so they can't drift apart again.
+        </p>
+      </div>
+      <p>
+        Protected files and formats without a writer (anything but MP3/M4A) only get
+        the result in the index, not the file. If the on-disk write itself fails
+        (ffmpeg missing, a permissions error, a NAS hiccup) while the lookup still
+        succeeded, that's tracked separately, surfaced in the <strong>Queue</strong>
+        tab, and automatically retried every 5 minutes without repeating the API
+        call — or immediately via a "Retry failed writes" button.
+      </p>
+
+      <h2>Not Found</h2>
+      <p>
+        Files whose iTunes lookup found nothing plausible are terminal ("not_found")
+        rather than retried forever — they're listed in the Not Found tab, and can be
+        requeued in bulk after a matching-logic improvement ships.
+      </p>
+    </main>
+  </div>
+</body>
+</html>

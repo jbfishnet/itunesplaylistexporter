@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Playlists &amp; Restore — Playlist Exporter Docs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="sidebar">
+      <a class="brand" href="index.html"><span class="brand-mark">Playlist Exporter</span></a>
+      <p class="brand-sub">Docs</p>
+      <ul>
+        <li><a href="index.html">Overview</a></li>
+        <li><a href="playlists.html" class="active">Playlists &amp; Restore</a></li>
+        <li><a href="search.html">Search &amp; Enrichment</a></li>
+        <li><a href="duplicates.html">Duplicates</a></li>
+        <li><a href="native-app.html">Native macOS App</a></li>
+        <li><a href="development.html">Development &amp; CI</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <a href="https://github.com/jbfishnet/itunesplaylistexporter">Source on GitHub ↗</a>
+      </div>
+    </nav>
+    <main>
+      <h1>Playlists &amp; Restore</h1>
+      <p class="page-sub">Export Music.app playlists to a memory card, and repair missing tracks against your NAS index.</p>
+
+      <h2>Export to memory card</h2>
+      <p>
+        Talks to Music.app live via AppleScript (<code>osascript</code>). Only
+        user-created playlists (regular + smart) are listed — the built-in
+        Library/Music sources and playlist folders are excluded.
+      </p>
+      <h3>Exportability check</h3>
+      <p>A track is skipped, with the reason shown before you export, if:</p>
+      <ul>
+        <li>it has no local file (e.g. an Apple Music match that was never downloaded)</li>
+        <li>Music.app reports it as protected AAC, or its extension is <code>.m4p</code></li>
+        <li>the file can't actually be found on disk (NAS not mounted, etc.)</li>
+      </ul>
+      <h3>File layout</h3>
+      <p>
+        Each selected playlist becomes a folder at your chosen destination, containing
+        its exportable tracks flat (no Artist/Album subfolders), named
+        <code>NN - Title.ext</code> where <code>NN</code> is the track's position in the
+        playlist — so most car head units play them in the intended order. Name
+        collisions get a <code>(2)</code>, <code>(3)</code>, … suffix. Filenames are
+        sanitized for exFAT/FAT32.
+      </p>
+
+      <h2 id="restore">Restoring missing tracks</h2>
+      <p>
+        This is the one feature in the app that writes to your actual Music.app
+        library, not just reads from it. Each playlist with missing tracks shows a
+        <strong>Restore missing tracks</strong> button.
+      </p>
+      <table>
+        <thead><tr><th>Match confidence</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-ready">Exact</span></td>
+            <td>Exactly one indexed file shares the missing track's title <em>and</em> artist (case/whitespace-insensitive) — imported into your Music library and swapped into the playlist automatically, no confirmation asked.</td>
+          </tr>
+          <tr>
+            <td>Ambiguous</td>
+            <td>2+ candidates, or only the title matched — left for you to review and pick via the UI, or skip.</td>
+          </tr>
+          <tr>
+            <td>No local match</td>
+            <td>An automatic Music.app <code>download</code> attempt is made (for Apple Music-matched tracks never downloaded) — not guaranteed to work on every macOS/Music.app version.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The matching logic (<code>src/playlistRestorer.js</code>) deliberately has no
+        fuzzy fallback — a false "ambiguous" is worse than a clean "no match," since
+        "no match" is what triggers a download attempt instead.
+      </p>
+
+      <div class="callout callout-limitation">
+        <p><span class="badge badge-limitation">Known limitation</span></p>
+        <p>
+          <strong>Restored tracks are appended to the end of the playlist, not
+          reinserted at their original position.</strong> This is a genuine platform
+          limitation of Music.app's AppleScript dictionary — confirmed by directly
+          testing its scripting interface: <code>move</code> only repositions whole
+          playlists (not tracks within one), <code>add</code>'s documented support for a
+          location specifier (<code>before</code>/<code>after</code>/<code>end of</code>)
+          doesn't actually work when called, and <code>duplicate ... to before
+          &lt;track&gt;</code> runs without error but silently doesn't reposition
+          anything either. There is no supported way to insert or move a track to a
+          specific index within a Music.app playlist via AppleScript.
+        </p>
+        <p>
+          Practical effect: since export numbers files by the playlist's current
+          position in Music.app, a playlist exported <em>after</em> a restore run will
+          have restored tracks trailing at the end, not in their original listening
+          order. If exact order matters for a given playlist, manually drag the
+          restored tracks back into place in Music.app before exporting.
+        </p>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
