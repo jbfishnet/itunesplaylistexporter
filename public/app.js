@@ -193,6 +193,14 @@
     return { total: tracks.length, ready, protectedCount, missing };
   }
 
+  /** Matches the naming "Rebuild as enriched copy" always produces
+   * server-side (src/playlistRebuilder.js's chooseRebuildName: "X (Enriched)",
+   * or "X (Enriched) 2" on a collision) — the sidebar groups on this rather
+   * than a separate flag, since the name *is* the source of truth for it. */
+  function isEnrichedCopy(name) {
+    return /\(Enriched\)(\s\d+)?$/.test(String(name || "").trim());
+  }
+
   const CLIENT_RETRY_ATTEMPTS = 3;
   const CLIENT_RETRY_DELAYS_MS = [600, 1800]; // between attempts 1→2 and 2→3
   const MAX_AUTO_HEAL_SWEEPS = 6; // ~2 minutes of periodic retries at 20s each
@@ -263,15 +271,29 @@
   // no local match at all gets an automatic Music.app download attempt.
 
   async function restorePlaylistTracks(id) {
+    const name = playlists.find((p) => p.id === id)?.name || "this playlist";
     restoreState.set(id, { running: true, result: null, error: null });
     renderMain();
+    showToast(`Restoring missing tracks in "${name}"…`);
     try {
       const res = await fetch(`/api/playlists/${encodeURIComponent(id)}/restore`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Restore failed");
       restoreState.set(id, { running: false, result: data, error: null });
+
+      const parts = [];
+      if (data.fixed.length) parts.push(`${data.fixed.length} fixed`);
+      if (data.downloading.length) parts.push(`${data.downloading.length} downloading`);
+      if (data.needsReview.length) parts.push(`${data.needsReview.length} need your input`);
+      if (data.unsupported.length) parts.push(`${data.unsupported.length} couldn't be downloaded`);
+      showToast(
+        parts.length
+          ? `"${name}": ${parts.join(", ")}. See the track list below for exactly what changed.`
+          : `"${name}": nothing to restore — no missing tracks matched locally or needed a download.`
+      );
     } catch (err) {
       restoreState.set(id, { running: false, result: null, error: err.message });
+      showToast(`Restoring "${name}" failed: ${err.message}`, { error: true });
     }
     // The playlist's contents may have changed (tracks added/removed) —
     // force a real refetch rather than trusting the now-stale cached list.
@@ -459,8 +481,18 @@
       .map((item) => `<div class="restore-unsupported-item">${item.title || "(untitled)"} — ${escapeAttr(item.reason || "couldn't download")}</div>`)
       .join("");
 
+    // Exactly what changed, not just a count: which track, matched to which
+    // file. filePathBasename mirrors the export table's own filename display.
+    const fixedHtml = r.fixed
+      .map(
+        (item) =>
+          `<div class="restore-fixed-item">✓ ${item.title || "(untitled)"}${item.artist ? ` — ${escapeAttr(item.artist)}` : ""} <span class="restore-fixed-path">→ ${escapeAttr(filePathBasename(item.matchedPath))}</span></div>`
+      )
+      .join("");
+
     return `<tr class="restore-status-row"><td colspan="5">
       <div class="restore-summary">${summary}</div>
+      ${fixedHtml ? `<div class="restore-fixed-list">${fixedHtml}</div>` : ""}
       ${reviewHtml ? `<div class="restore-review-list">${reviewHtml}</div>` : ""}
       ${unsupportedHtml ? `<div class="restore-unsupported-list">${unsupportedHtml}</div>` : ""}
     </td></tr>`;
@@ -542,6 +574,11 @@
     return String(str).replace(/"/g, "&quot;");
   }
 
+  function filePathBasename(path) {
+    if (!path) return "";
+    return path.split("/").pop();
+  }
+
   /** A play button next to a title, wired up to the shared mini-player
    * (public/audioPlayer.js) — disabled with no url when there's nothing
    * playable (protected/missing tracks). */
@@ -609,6 +646,7 @@
         <span class="playlist-name">${p.name}</span>
         <span class="playlist-meta">${p.trackCount} tracks${metaExtra}</span>
       </span>
+      <button type="button" class="playlist-menu-btn" data-playlist-menu title="Playlist options">⋯</button>
     `;
     item.querySelector(".playlist-checkbox").addEventListener("change", (e) => {
       if (e.target.checked) {
@@ -631,6 +669,16 @@
       e.preventDefault();
       openContextMenu(e.clientX, e.clientY, { id: p.id, name: p.name });
     });
+    // Right-click's reliability varies across trackpad/mouse setups inside a
+    // native WKWebView (no browser chrome to fall back on) — this button is
+    // the guaranteed, single-click way to reach the same menu, not just a
+    // decorative extra.
+    item.querySelector("[data-playlist-menu]").addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = e.currentTarget.getBoundingClientRect();
+      openContextMenu(rect.right, rect.bottom, { id: p.id, name: p.name });
+    });
     return item;
   }
 
@@ -647,10 +695,17 @@
       return;
     }
 
+    // "Rebuild as enriched copy" always names its output "X (Enriched)" (or
+    // "X (Enriched) 2" on a name collision, see chooseRebuildName server-side)
+    // — grouping on that naming convention needs no extra server-side flag.
+    const enrichedCopies = [];
+    const rest = [];
+    visible.forEach((p) => (isEnrichedCopy(p.name) ? enrichedCopies : rest).push(p));
+
     const exportable = [];
     const blocked = [];
     const unchecked = [];
-    visible.forEach((p) => {
+    rest.forEach((p) => {
       if (trackCache.has(p.id)) {
         (counts(trackCache.get(p.id)).ready > 0 ? exportable : blocked).push(p);
       } else {
@@ -667,6 +722,7 @@
       sortPlaylists(list).forEach((p) => listEl.appendChild(buildPlaylistItem(p)));
     };
 
+    addSection("Enriched copies", "enriched", enrichedCopies);
     addSection("Ready to export", "exportable", exportable);
     addSection("Nothing to export", "blocked", blocked);
     addSection("Not checked yet", "", unchecked);

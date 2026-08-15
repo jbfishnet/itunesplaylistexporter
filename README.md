@@ -55,6 +55,9 @@ library, not just reads from it:
   isn't guaranteed to work on every macOS/Music.app version — if it isn't
   supported on your setup, the track is reported as such so you can download
   it manually in Music.app instead, then restore again.
+- A toast confirms what happened as soon as it's done (e.g. "3 fixed, 1 need
+  your input"), and the track list itself shows exactly which tracks were
+  fixed and which local file each one was matched to — not just a count.
 
 Restoring in place has one real limitation worth knowing: Music.app's
 AppleScript dictionary has no way to reposition a track within a playlist
@@ -65,7 +68,10 @@ of the playlist, not back in its original spot.
 
 ### Right-click a playlist: rebuild as an enriched copy, or delete it
 
-Right-click any playlist in the sidebar for a small options menu:
+Right-click any playlist in the sidebar for a small options menu, or click the
+**⋯** button on the row — right-click's reliability varies across
+trackpad/mouse setups inside the native app's WKWebView, so the button is the
+guaranteed single-click way in:
 
 - **Rebuild as enriched copy** builds a brand-new playlist (named
   `"Original Name (Enriched)"`) with every track from the original, in the
@@ -78,6 +84,10 @@ Right-click any playlist in the sidebar for a small options menu:
   never modified — a rebuild is always safe to run.
 - **Delete playlist…** asks for confirmation, then deletes the playlist
   itself (not its tracks) — irreversible from this app's side.
+
+Rebuilt copies get their own **Enriched copies** section at the top of the
+sidebar (detected by the `(Enriched)` naming convention above, not a
+separate flag), so they're easy to find alongside your regular playlists.
 
 ## Setup
 

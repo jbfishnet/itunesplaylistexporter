@@ -81,7 +81,10 @@
 
       <h2 id="rebuild">Rebuild as an enriched copy</h2>
       <p>
-        Right-click any playlist for a small options menu — its first two entries:
+        Right-click any playlist for a small options menu, or click the <strong>⋯</strong>
+        button on the row — right-click's reliability varies across trackpad/mouse
+        setups inside a native WKWebView with no browser chrome to fall back on, so
+        the button is the guaranteed single-click way in. Its first two entries:
       </p>
       <ul>
         <li><strong>Rebuild as enriched copy</strong> — builds a brand-new playlist (named
@@ -96,6 +99,12 @@
           playlist itself (not the tracks in your library). Irreversible from the app's
           side.</li>
       </ul>
+      <p>
+        Rebuilt copies get their own <strong>Enriched copies</strong> section at the
+        top of the sidebar (detected by the <code>(Enriched)</code> naming
+        convention, not a separate flag), so they're easy to find alongside your
+        regular playlists.
+      </p>
       <p>
         This exists specifically because in-place restore (above) can't fix track
         order — see the limitation below. Rebuilding a full ordered copy sidesteps it
