@@ -144,7 +144,16 @@ mounted in Finder before exporting — otherwise those tracks will show as
   needed. This runs slowly and continuously (roughly one lookup every 1.75s)
   so it never hammers Apple's servers or blocks anything else; a large
   backlog just drains gradually in the background. Well-tagged files are
-  never looked up at all.
+  never looked up at all. A match is written back into the file's own tags
+  on disk (MP3 via ID3, M4A via a lossless ffmpeg remux) — never overwriting
+  a field that already has a real value, only filling in what was actually
+  missing or a recognized placeholder — so the fix is permanent and a
+  reindex never needs to re-enrich the same file twice. Protected files and
+  formats without a writer (see below) only get the result in the index,
+  not the file. If the on-disk write itself fails (ffmpeg missing, a
+  permissions error, ...) while the lookup still succeeded, that's tracked
+  separately and surfaced in the Queue tab with a retry button — the search
+  index already has the right metadata either way.
 - **The index** lives at `data/library.sqlite3` (gitignored) — delete that
   file any time to force a full reindex from scratch.
 - Protected-file detection here is extension-only (`.m4p`) — unlike the
@@ -177,10 +186,15 @@ remove it from the index — this can't be undone.
   car-audio SD cards/USB drives), so the export folder is safe to use even if
   track titles contain characters like `:` or `/`.
 - The Duplicates tab can permanently delete files from your NAS archive (see
-  above), and the Playlists tab's "Restore missing tracks" can add tracks to
-  and remove tracks from your real Music.app library (see above) — both are
-  deliberate, user-triggered exceptions to the rule below.
+  above), the Playlists tab's "Restore missing tracks" can add tracks to and
+  remove tracks from your real Music.app library (see above), and background
+  metadata enrichment can add missing tags directly into a file on your NAS
+  archive (see "Metadata enrichment" above) — these are deliberate,
+  behind-the-scenes exceptions to the rule below. Enrichment writes are
+  narrowly scoped (only fields that were actually empty or a placeholder,
+  never a real existing value) but they do modify files on disk, unprompted,
+  in the background — worth knowing if you'd rather your archive's files
+  stay byte-for-byte untouched.
 - Otherwise, nothing is deleted or modified in your Music library or your NAS
   archive — every other action only ever reads files (and, for exporting,
-  copies them elsewhere). Metadata enrichment results are stored only in the
-  local search index, not written back into the actual audio files.
+  copies them elsewhere).

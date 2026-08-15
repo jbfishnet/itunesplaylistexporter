@@ -1,5 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { parseFile } = require("music-metadata");
 
 const { openLibraryDb } = require("../src/libraryDb");
 const {
@@ -11,6 +15,8 @@ const {
   pickBestMatch,
 } = require("../src/enrichmentQueue");
 
+const FIXTURES = path.join(__dirname, "fixtures");
+
 function freshDb(t) {
   const db = openLibraryDb(":memory:");
   t.after(() => db.close());
@@ -19,6 +25,14 @@ function freshDb(t) {
 
 function fakeItunesResponse(results) {
   return { ok: true, status: 200, json: async () => ({ resultCount: results.length, results }) };
+}
+
+function tempCopy(t, fixtureName, destName = fixtureName) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ple-enrichqueue-"));
+  const dest = path.join(dir, destName);
+  fs.copyFileSync(path.join(FIXTURES, fixtureName), dest);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dest;
 }
 
 test("filenameToSearchTerm cleans up separator-mangled filenames and strips a leading track number", () => {
@@ -224,4 +238,111 @@ test("getState reports the configured pace, so clients can compute an ETA", (t) 
   const db = freshDb(t);
   const queue = createEnrichmentQueue({ db, fetchFn: async () => fakeItunesResponse([]), intervalMs: 2500 });
   assert.equal(queue.getState().intervalMs, 2500);
+});
+
+test("a successful match is actually written into the file on disk, not just the index", async (t) => {
+  const db = freshDb(t);
+  const filePath = tempCopy(t, "untagged.mp3");
+  db.upsertFile({
+    path: filePath,
+    size: 1,
+    mtimeMs: 1,
+    extension: "mp3",
+    artist: "Avril Lavigne",
+    title: "Complicated",
+    enrichmentStatus: "pending",
+    scanId: 1,
+  });
+
+  const fetchFn = async () =>
+    fakeItunesResponse([{ artistName: "Avril Lavigne", trackName: "Complicated", collectionName: "Let Go", primaryGenreName: "Pop" }]);
+
+  const queue = createEnrichmentQueue({ db, fetchFn });
+  await queue.processOne();
+
+  const row = db.getFileByPath(filePath);
+  assert.equal(row.enrichment_status, "enriched");
+  assert.equal(row.tag_write_status, "written");
+
+  // Artist/title were already set on the row (used to trigger a direct
+  // match above) so writeTagsForRow correctly leaves them alone — album is
+  // the field that was actually empty going in, so it's the one that
+  // proves the result landed in the file's own tags, not just the index.
+  const onDisk = await parseFile(filePath);
+  assert.equal(onDisk.common.album, "Let Go", "the enrichment result must land in the file's own tags");
+});
+
+test("a write-back failure is tracked (tag_write_status='failed') without crashing the queue or losing the index match", async (t) => {
+  const db = freshDb(t);
+  // A path that doesn't exist on disk — the search succeeds, the write can't.
+  db.upsertFile({
+    path: "/nonexistent/dir/track.mp3",
+    size: 1,
+    mtimeMs: 1,
+    extension: "mp3",
+    artist: "X",
+    title: "Y",
+    enrichmentStatus: "pending",
+    scanId: 1,
+  });
+
+  // collectionName gives writeTagsForRow an actually-missing field (album)
+  // to attempt writing — title/artist alone would resolve to "nothing to
+  // write" and never touch the filesystem at all.
+  const fetchFn = async () => fakeItunesResponse([{ artistName: "X", trackName: "Y", collectionName: "Z" }]);
+  const queue = createEnrichmentQueue({ db, fetchFn });
+  const result = await queue.processOne();
+
+  assert.equal(result.matched, true);
+  const row = db.getFileByPath("/nonexistent/dir/track.mp3");
+  assert.equal(row.enrichment_status, "enriched", "the index match is kept even though the file write failed");
+  assert.equal(row.tag_write_status, "failed");
+  assert.match(queue.getState().lastError, /Tag write-back failed/);
+  assert.equal(queue.getState().tagWriteFailures, 1);
+});
+
+test("retryFailedWrites re-reads the file fresh and succeeds once the file is actually writable, without another API call", async (t) => {
+  const db = freshDb(t);
+  const filePath = tempCopy(t, "untagged.mp3");
+  const id = db.upsertFile({ path: filePath, size: 1, mtimeMs: 1, extension: "mp3", enrichmentStatus: "pending", scanId: 1 });
+
+  let searchCalls = 0;
+  const fetchFn = async () => {
+    searchCalls += 1;
+    return fakeItunesResponse([{ artistName: "Avril Lavigne", trackName: "Complicated", collectionName: "Let Go" }]);
+  };
+  const queue = createEnrichmentQueue({ db, fetchFn });
+
+  // Simulate a write that failed even though the row (from an earlier
+  // successful lookup) already holds the right target metadata.
+  db.markEnriched(id, { title: "Complicated", artist: "Avril Lavigne", album: "Let Go", genre: "Pop", year: 2002 });
+  db.setTagWriteStatus(id, "failed");
+
+  const summary = await queue.retryFailedWrites();
+  assert.deepEqual(summary, { attempted: 1, written: 1, stillFailed: 0 });
+  assert.equal(searchCalls, 0, "retrying a write must never repeat the iTunes lookup");
+
+  const row = db.getFileByPath(filePath);
+  assert.equal(row.tag_write_status, "written");
+  const onDisk = await parseFile(filePath);
+  assert.equal(onDisk.common.artist, "Avril Lavigne");
+});
+
+test("retryFailedWrites leaves a vanished file as still-failed rather than throwing", async (t) => {
+  const db = freshDb(t);
+  const id = db.upsertFile({
+    path: "/gone/track.mp3",
+    size: 1,
+    mtimeMs: 1,
+    extension: "mp3",
+    enrichmentStatus: "enriched",
+    scanId: 1,
+  });
+  db.setTagWriteStatus(id, "failed");
+
+  const queue = createEnrichmentQueue({ db, fetchFn: async () => fakeItunesResponse([]) });
+  const summary = await queue.retryFailedWrites();
+
+  assert.deepEqual(summary, { attempted: 1, written: 0, stillFailed: 1 });
+  assert.equal(db.getFileByPath("/gone/track.mp3").tag_write_status, "failed");
 });

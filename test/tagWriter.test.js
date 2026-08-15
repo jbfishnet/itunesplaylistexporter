@@ -28,6 +28,19 @@ test("fieldsToFill never includes a field the new tags don't actually have", () 
   assert.deepEqual(fieldsToFill(row, { title: "T" }), { title: "T" });
 });
 
+test("fieldsToFill treats a placeholder album (e.g. 'Unknown Album') as fillable, not a real existing value", () => {
+  const row = { title: "T", artist: "A", album: "Unknown Album", genre: "G", year: 2000 };
+  assert.deepEqual(fieldsToFill(row, { album: "The Real Album" }), { album: "The Real Album" });
+  // Case/whitespace-insensitive, and the bare "Unknown" variant, same as
+  // decideNeedsEnrichment's definition in libraryScanner.js.
+  assert.deepEqual(fieldsToFill({ ...row, album: "  UNKNOWN  " }, { album: "Real" }), { album: "Real" });
+});
+
+test("fieldsToFill never overwrites a real album, even an unusual one that happens to contain 'unknown'", () => {
+  const row = { album: "Somewhat Unknown Origins" };
+  assert.deepEqual(fieldsToFill(row, { album: "Ignored" }), {});
+});
+
 test("writeTagsForRow refuses a DRM-protected row regardless of format", async () => {
   const result = await writeTagsForRow(
     { path: "/anything.mp3", extension: "mp3", protected: true, title: null },

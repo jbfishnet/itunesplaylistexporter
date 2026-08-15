@@ -516,6 +516,8 @@ app.get("/api/library/status", (req, res) => {
     enrichmentNotFound: enrichState.notFound,
     enrichmentIntervalMs: enrichState.intervalMs,
     enrichmentLastError: enrichState.lastError,
+    tagWriteCounts: stats.tagWriteCounts,
+    tagWriteFailures: enrichState.tagWriteFailures,
     duplicatesHashed: duplicateFinder?.getState().hashed || 0,
   });
 });
@@ -523,6 +525,21 @@ app.get("/api/library/status", (req, res) => {
 app.post("/api/library/rescan", (req, res) => {
   if (!libraryScheduler) return res.status(503).json({ error: "Library index is disabled" });
   res.json(libraryScheduler.triggerNow());
+});
+
+// Re-attempts writing enrichment results into files whose on-disk write
+// previously failed (ffmpeg missing, a permissions error, ...) — the DB
+// already has the right metadata from the original lookup (see
+// enrichmentQueue.js), so this only retries the local file write, never
+// another API call. User-triggered rather than automatic, same reasoning as
+// requeue-not-found below.
+app.post("/api/library/retry-tag-writes", async (req, res) => {
+  if (!libraryDb || !enrichmentQueue) return res.status(503).json({ error: "Library index is disabled" });
+  try {
+    res.json(await enrichmentQueue.retryFailedWrites());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post("/api/library/requeue-not-found", (req, res) => {

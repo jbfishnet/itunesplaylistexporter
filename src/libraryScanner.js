@@ -2,6 +2,7 @@ const fs = require("fs");
 const fsPromises = require("fs/promises");
 const path = require("path");
 const { readTags: defaultReadTags } = require("./tagReader");
+const { isPlaceholderAlbum } = require("./metadataPlaceholders");
 
 const AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "m4p", "flac", "wav", "aiff", "aif", "ogg"]);
 
@@ -12,15 +13,13 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "m4p", "flac", "wav", "aiff", "a
 // PREFETCH_CONCURRENCY constant in public/app.js.
 const SCAN_CONCURRENCY = 4;
 
-const PLACEHOLDER_ALBUMS = new Set(["unknown album", "unknown", ""]);
-
 /** Does this file's metadata look sparse enough to be worth an internet lookup? */
 function decideNeedsEnrichment(tags) {
   const artist = (tags.artist || "").trim();
   const album = (tags.album || "").trim();
   const genre = (tags.genre || "").trim();
   if (!artist) return true;
-  if (!album || PLACEHOLDER_ALBUMS.has(album.toLowerCase())) return true;
+  if (!album || isPlaceholderAlbum(album)) return true;
   if (!genre) return true;
   return false;
 }

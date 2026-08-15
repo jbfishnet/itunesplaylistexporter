@@ -1,6 +1,7 @@
 const path = require("path");
 const { identifyByFingerprint } = require("./acoustId");
 const { writeTagsForRow } = require("./tagWriter");
+const { readTags } = require("./tagReader");
 
 const ITUNES_SEARCH_URL = "https://itunes.apple.com/search";
 
@@ -194,9 +195,19 @@ function createEnrichmentQueue({ db, fetchFn = globalThis.fetch, intervalMs = DE
       if (tags) {
         db.markEnriched(row.id, tags);
         state.enriched += 1;
-        writeTagsForRow(row, tags).catch((err) => {
+        // Awaited (not fire-and-forget) so a failure here — ffmpeg missing,
+        // a permissions error, the NAS hiccupping mid-write — is actually
+        // recorded rather than silently lost. markEnriched above already
+        // saved the right metadata to the index regardless, so a failure
+        // here only means the *file itself* hasn't caught up yet; it never
+        // costs another API lookup to retry (see retryFailedWrites below).
+        try {
+          const result = await writeTagsForRow(row, tags);
+          db.setTagWriteStatus(row.id, result.written ? "written" : "skipped");
+        } catch (err) {
           state.lastError = `Tag write-back failed for ${row.path}: ${err.message}`;
-        });
+          db.setTagWriteStatus(row.id, "failed");
+        }
       } else {
         db.markNotFound(row.id);
         state.notFound += 1;
@@ -205,6 +216,42 @@ function createEnrichmentQueue({ db, fetchFn = globalThis.fetch, intervalMs = DE
     } finally {
       busy = false;
     }
+  }
+
+  /** Re-attempts every currently-failed tag write, re-reading each file's
+   * *current* on-disk tags first rather than assuming nothing changed since
+   * the failed attempt (the row's DB fields already hold the target values
+   * from the original successful lookup, so no API call is needed here —
+   * only the local write is retried). User-triggered via
+   * POST /api/library/retry-tag-writes, the same way stale "not found"
+   * results are requeued via requeueNotFound — not automatic, since a
+   * write failure is often environmental (ffmpeg not installed, a share
+   * that's temporarily read-only) and retrying every file on a fixed
+   * schedule would just repeat the same failure until the user fixes it. */
+  async function retryFailedWrites(limit = 200) {
+    const rows = db.getTagWriteFailures(limit);
+    let written = 0;
+    let stillFailed = 0;
+    for (const row of rows) {
+      const onDisk = await readTags(row.path);
+      if (!onDisk.ok) {
+        stillFailed += 1;
+        state.lastError = `Tag write retry skipped for ${row.path}: file isn't readable (${onDisk.error})`;
+        continue;
+      }
+      try {
+        const result = await writeTagsForRow(
+          { ...onDisk, path: row.path },
+          { title: row.title, artist: row.artist, album: row.album, genre: row.genre, year: row.year }
+        );
+        db.setTagWriteStatus(row.id, result.written ? "written" : "skipped");
+        written += 1;
+      } catch (err) {
+        state.lastError = `Tag write retry failed for ${row.path}: ${err.message}`;
+        stillFailed += 1;
+      }
+    }
+    return { attempted: rows.length, written, stillFailed };
   }
 
   function start() {
@@ -217,10 +264,15 @@ function createEnrichmentQueue({ db, fetchFn = globalThis.fetch, intervalMs = DE
   }
 
   function getState() {
-    return { ...state, backlogSize: db.getStats().enrichmentCounts.pending || 0, intervalMs };
+    return {
+      ...state,
+      backlogSize: db.getStats().enrichmentCounts.pending || 0,
+      tagWriteFailures: db.getStats().tagWriteCounts.failed || 0,
+      intervalMs,
+    };
   }
 
-  return { start, stop, processOne, getState };
+  return { start, stop, processOne, retryFailedWrites, getState };
 }
 
 module.exports = {

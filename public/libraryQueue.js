@@ -8,6 +8,9 @@
   const statStripEl = el("queueStatStrip");
   const metaEl = el("queueMeta");
   const resultsBody = el("queueResultsBody");
+  const writeFailuresEl = el("queueWriteFailures");
+  const writeFailuresTextEl = el("queueWriteFailuresText");
+  const retryWritesBtn = el("queueRetryWritesBtn");
 
   const QUEUE_PREVIEW_SIZE = 100;
   let pollTimer = null;
@@ -89,6 +92,33 @@
         `Checking one file roughly every ${Math.round((status.enrichmentIntervalMs || 1750) / 100) / 10}s` +
         (status.enrichmentLastError ? ` · last attempt hit an error: ${status.enrichmentLastError}` : "");
     }
+
+    const writeFailures = status.tagWriteFailures || 0;
+    if (writeFailures > 0) {
+      writeFailuresEl.style.display = "";
+      writeFailuresTextEl.textContent =
+        `${writeFailures} file${writeFailures === 1 ? "" : "s"} found the right metadata but the ` +
+        `write to the actual file failed (missing ffmpeg, a permissions error, ...) — the search ` +
+        `index is still correct for these, only the file itself hasn't caught up. `;
+    } else {
+      writeFailuresEl.style.display = "none";
+    }
+  }
+
+  async function retryFailedWrites() {
+    retryWritesBtn.disabled = true;
+    retryWritesBtn.textContent = "Retrying…";
+    try {
+      const res = await fetch("/api/library/retry-tag-writes", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Retry failed");
+      await loadQueue();
+    } catch (err) {
+      writeFailuresTextEl.textContent = `Retry failed: ${err.message}`;
+    } finally {
+      retryWritesBtn.disabled = false;
+      retryWritesBtn.textContent = "Retry failed writes";
+    }
   }
 
   function renderRows(rows, total) {
@@ -119,6 +149,8 @@
     bindPlayButtons(resultsBody);
     bindRevealButtons(resultsBody);
   }
+
+  retryWritesBtn.addEventListener("click", retryFailedWrites);
 
   document.addEventListener("ple:tab-activated", (e) => {
     if (e.detail.tabName === "queue") {
