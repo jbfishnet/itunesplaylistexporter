@@ -65,7 +65,7 @@
           </tr>
           <tr>
             <td>Ambiguous</td>
-            <td>2+ candidates, or only the title matched — left for you to review and pick via the UI, or skip.</td>
+            <td>2+ candidates, or only the title matched — left for you to review and pick via the UI, or skip. Exception: if exactly one of 2+ title+artist candidates is under your designated <a href="duplicates.html">main library</a>, that one is auto-applied as an exact match instead.</td>
           </tr>
           <tr>
             <td>No local match</td>
@@ -79,24 +79,63 @@
         "no match" is what triggers a download attempt instead.
       </p>
 
+      <h2 id="rebuild">Rebuild as an enriched copy</h2>
+      <p>
+        Right-click any playlist for a small options menu, or click the <strong>⋯</strong>
+        button on the row — right-click's reliability varies across trackpad/mouse
+        setups inside a native WKWebView with no browser chrome to fall back on, so
+        the button is the guaranteed single-click way in. Its first two entries:
+      </p>
+      <ul>
+        <li><strong>Rebuild as enriched copy</strong> — builds a brand-new playlist (named
+          <code>"Original Name (Enriched)"</code>, with a numbered suffix if that name is
+          already taken) containing every track from the original, in the same order.
+          Missing tracks with an exact local-index match are replaced with the real
+          file, right in their original slot; anything ambiguous or unmatched is kept
+          exactly as it was, still missing, still in the right position — nothing is
+          ever silently dropped. The original playlist is never modified, so a rebuild
+          is always safe to run, any time.</li>
+        <li><strong>Delete playlist…</strong> — asks for confirmation, then deletes the
+          playlist itself (not the tracks in your library). Irreversible from the app's
+          side.</li>
+      </ul>
+      <p>
+        Rebuilt copies get their own <strong>Enriched copies</strong> section at the
+        top of the sidebar (detected by the <code>(Enriched)</code> naming
+        convention, not a separate flag), so they're easy to find alongside your
+        regular playlists.
+      </p>
+      <p>
+        This exists specifically because in-place restore (above) can't fix track
+        order — see the limitation below. Rebuilding a full ordered copy sidesteps it
+        entirely: every track lands in its correct slot simply by the order the app
+        calls Music.app's <code>add</code>/<code>duplicate</code> commands in, which is
+        the one thing they reliably get right.
+      </p>
+
       <div class="callout callout-limitation">
-        <p><span class="badge badge-limitation">Known limitation</span></p>
+        <p><span class="badge badge-limitation">Known limitation (restore in place)</span></p>
         <p>
-          <strong>Restored tracks are appended to the end of the playlist, not
-          reinserted at their original position.</strong> This is a genuine platform
-          limitation of Music.app's AppleScript dictionary — confirmed by directly
-          testing its scripting interface: <code>move</code> only repositions whole
-          playlists (not tracks within one), <code>add</code>'s documented support for a
-          location specifier (<code>before</code>/<code>after</code>/<code>end of</code>)
-          doesn't actually work when called, and <code>duplicate ... to before
+          <strong>Restoring a track <em>in place</em> appends it to the end of the
+          playlist, not back at its original position.</strong> This is a genuine
+          platform limitation of Music.app's AppleScript dictionary — confirmed by
+          directly testing its scripting interface: <code>move</code> only repositions
+          whole playlists (not tracks within one), <code>add</code>'s documented
+          support for a location specifier
+          (<code>before</code>/<code>after</code>/<code>end of</code>) doesn't
+          actually work when called, and <code>duplicate ... to before
           &lt;track&gt;</code> runs without error but silently doesn't reposition
           anything either. There is no supported way to insert or move a track to a
-          specific index within a Music.app playlist via AppleScript.
+          specific index within a Music.app playlist via AppleScript — which is why
+          "Rebuild as enriched copy" above exists as a separate feature: it fixes
+          order by building a new playlist from scratch instead of trying to
+          reposition anything in the old one.
         </p>
         <p>
-          Practical effect: since export numbers files by the playlist's current
-          position in Music.app, a playlist exported <em>after</em> a restore run will
-          have restored tracks trailing at the end, not in their original listening
+          Practical effect if you still use in-place restore: since export numbers
+          files by the playlist's current position in Music.app, a playlist exported
+          <em>after</em> a restore run will have restored tracks trailing at the end,
+          not in their original listening
           order. If exact order matters for a given playlist, manually drag the
           restored tracks back into place in Music.app before exporting.
         </p>

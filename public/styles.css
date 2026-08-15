@@ -135,6 +135,54 @@ body {
   white-space: pre-wrap;
 }
 
+.toast {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  max-width: 480px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: var(--success-wash);
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.toast.toast-error { background: var(--danger-wash); color: var(--danger); }
+
+/* ---------- Playlist right-click context menu ---------- */
+.context-menu {
+  position: fixed;
+  z-index: 600;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 200px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.context-menu li { margin: 0; }
+.context-menu button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.context-menu button:hover { background: var(--surface-2); }
+.context-menu button.danger { color: var(--danger); }
+.context-menu button.danger:hover { background: var(--danger-wash); }
+.context-menu .menu-divider { height: 1px; background: var(--border); margin: 6px 4px; }
+
 /* ---------- Tabs ---------- */
 .tabbar {
   display: flex;
@@ -237,6 +285,7 @@ body {
 
 .section-heading.exportable { color: var(--success); }
 .section-heading.blocked { color: var(--text-faint); }
+.section-heading.enriched { color: var(--accent-strong); }
 
 .sidebar-actions {
   display: flex;
@@ -282,8 +331,23 @@ body {
 .playlist-item.checked { background: var(--surface); border-left-color: var(--accent); }
 
 .playlist-checkbox { margin-top: 3px; width: 15px; height: 15px; flex: none; accent-color: var(--accent); }
-.playlist-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.playlist-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .playlist-name { font-size: 13.5px; font-weight: 600; }
+
+.playlist-menu-btn {
+  flex: none;
+  margin-left: auto;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.playlist-menu-btn:hover { background: var(--surface-2); color: var(--text); }
 
 .playlist-meta {
   font-size: 11.5px;
@@ -403,6 +467,9 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
 .restore-skip-btn { color: var(--text-faint); }
 .restore-unsupported-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .restore-unsupported-item { font-size: 11.5px; color: var(--text-muted); }
+.restore-fixed-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.restore-fixed-item { font-size: 11.5px; color: var(--success); }
+.restore-fixed-path { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
 
 .empty-state { padding: 48px 20px; text-align: center; color: var(--text-muted); font-size: 13.5px; }
 
@@ -410,6 +477,8 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
 .error-state .retry-link { margin-left: 6px; }
 
 .col-pos { font-family: var(--font-mono); color: var(--text-faint); font-variant-numeric: tabular-nums; width: 32px; }
+.col-select { width: 28px; }
+.col-select input[type="checkbox"], td.col-select input[type="checkbox"] { accent-color: var(--accent); }
 .track-title { font-weight: 600; }
 .track-sub { font-size: 11.5px; color: var(--text-muted); }
 .col-format { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
@@ -475,6 +544,17 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
   white-space: nowrap;
 }
 .folder-row.missing .folder-path { color: var(--text-faint); }
+.folder-main-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.folder-main-toggle input { accent-color: var(--accent); cursor: pointer; }
 .folder-add-row { display: flex; gap: 8px; padding: 12px 14px; background: var(--surface-2); }
 .folder-add-row input { flex: 1; }
 .folder-empty { padding: 12px 14px; color: var(--text-faint); font-size: 12.5px; }
@@ -661,6 +741,10 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
 .progress-overlay.open { display: flex; }
 
 .progress-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); width: 100%; max-width: 460px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; }
+
+.metadata-edit-fields { display: flex; flex-direction: column; gap: 10px; }
+.metadata-edit-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+.metadata-edit-fields input { width: 100%; }
 .progress-title { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
 .progress-track { height: 8px; border-radius: 100px; background: var(--surface-2); overflow: hidden; }
 .progress-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 100px; transition: width 0.25s ease; }

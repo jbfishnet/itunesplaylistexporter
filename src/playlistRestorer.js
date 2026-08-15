@@ -11,11 +11,35 @@ function normalize(value) {
 }
 
 /**
+ * When title+artist both matched but 2+ physical copies exist (e.g. the same
+ * file present in more than one NAS snapshot/backup — a common, otherwise
+ * unavoidable source of "ambiguous" results), auto-resolve to "exact" if
+ * exactly one of them lives under the user's designated main library (see
+ * libraryDb.js's getMainLibraryRoot) — the same preference the Duplicates
+ * tab already uses for "which copy to keep" when deleting. Deliberately
+ * narrow: only collapses a tie that's purely about *which physical copy*,
+ * never applied to the weaker title-only match below (where whether it's
+ * even the right song, not just which copy, is the open question — a main-
+ * library preference has nothing useful to say about that). Returns null
+ * (no auto-pick) whenever 0 or 2+ candidates are under the main library, or
+ * no main library is configured at all — those are still genuinely ambiguous.
+ */
+function resolveByMainLibrary(candidates, libraryDb) {
+  const mainRoot = libraryDb.getMainLibraryRoot?.();
+  if (!mainRoot) return null;
+  const inMain = candidates.filter((f) => f.path.startsWith(mainRoot));
+  return inMain.length === 1 ? inMain[0] : null;
+}
+
+/**
  * Looks up local-index candidates for one missing playlist track.
  * - "exact": exactly one indexed file shares this track's title AND artist
- *   (case/whitespace-insensitive) — safe to auto-apply without asking.
- * - "ambiguous": 2+ candidates, or only the title matched (artist missing/
- *   different) — could be a cover/live version/mix-up, needs a human pick.
+ *   (case/whitespace-insensitive) — safe to auto-apply without asking. Also
+ *   reached when 2+ copies exist but the main library breaks the tie (see
+ *   resolveByMainLibrary).
+ * - "ambiguous": 2+ candidates the main library doesn't resolve, or only the
+ *   title matched (artist missing/different) — could be a cover/live
+ *   version/mix-up, needs a human pick.
  * - "none": nothing in the index looks like this track at all.
  */
 function findCandidates(track, libraryDb) {
@@ -30,7 +54,11 @@ function findCandidates(track, libraryDb) {
     (f) => normalize(f.title) === title && artist !== "" && normalize(f.artist) === artist
   );
   if (exactTitleArtist.length === 1) return { confidence: "exact", candidates: exactTitleArtist };
-  if (exactTitleArtist.length > 1) return { confidence: "ambiguous", candidates: exactTitleArtist };
+  if (exactTitleArtist.length > 1) {
+    const autoPicked = resolveByMainLibrary(exactTitleArtist, libraryDb);
+    if (autoPicked) return { confidence: "exact", candidates: [autoPicked] };
+    return { confidence: "ambiguous", candidates: exactTitleArtist };
+  }
 
   const titleOnly = broad.filter((f) => normalize(f.title) === title);
   if (titleOnly.length > 0) return { confidence: "ambiguous", candidates: titleOnly };

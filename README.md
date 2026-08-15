@@ -55,6 +55,39 @@ library, not just reads from it:
   isn't guaranteed to work on every macOS/Music.app version — if it isn't
   supported on your setup, the track is reported as such so you can download
   it manually in Music.app instead, then restore again.
+- A toast confirms what happened as soon as it's done (e.g. "3 fixed, 1 need
+  your input"), and the track list itself shows exactly which tracks were
+  fixed and which local file each one was matched to — not just a count.
+
+Restoring in place has one real limitation worth knowing: Music.app's
+AppleScript dictionary has no way to reposition a track within a playlist
+(verified directly against its scripting interface — `move` only repositions
+whole playlists, and `add`/`duplicate`'s documented position-specifier
+support doesn't actually work), so a restored track always lands at the end
+of the playlist, not back in its original spot.
+
+### Right-click a playlist: rebuild as an enriched copy, or delete it
+
+Right-click any playlist in the sidebar for a small options menu, or click the
+**⋯** button on the row — right-click's reliability varies across
+trackpad/mouse setups inside the native app's WKWebView, so the button is the
+guaranteed single-click way in:
+
+- **Rebuild as enriched copy** builds a brand-new playlist (named
+  `"Original Name (Enriched)"`) with every track from the original, in the
+  *same order* — missing tracks with an exact match are replaced with the
+  real file right in their original slot, and anything ambiguous or
+  unmatched is preserved exactly as-is rather than dropped. This is the fix
+  for the ordering limitation above: instead of trying to reposition a track
+  in place (which Music.app's scripting can't do), it builds the whole
+  playlist fresh in the right order to begin with. The original playlist is
+  never modified — a rebuild is always safe to run.
+- **Delete playlist…** asks for confirmation, then deletes the playlist
+  itself (not its tracks) — irreversible from this app's side.
+
+Rebuilt copies get their own **Enriched copies** section at the top of the
+sidebar (detected by the `(Enriched)` naming convention above, not a
+separate flag), so they're easy to find alongside your regular playlists.
 
 ## Setup
 
@@ -173,15 +206,29 @@ Built on the same index as the Search tab, this tab has two sections:
 - **Similar Titles** — files that share a title but differ in some other way
   (artist, album, format, size, ...) — not confirmed identical, so this could
   be a real duplicate or a genuinely different recording (a live version, a
-  cover, a remix). Deletion here follows one hard rule: **a copy under
-  `/Volumes/jb/iTunes4TB/iTunes Media/Music` is never deleted** — it's always
-  the one kept. If a group has no copy under that path, the oldest-indexed
-  copy is kept instead. Deletes in this section fire immediately (no
-  confirmation dialog), per-file, per-group ("Delete other copies"), or for
-  every group at once ("Delete All Non-Canonical Copies").
+  cover, a remix). Deletion here follows one hard rule: **a copy under your
+  designated main library is never deleted** — it's always the one kept. If a
+  group has no copy under it (or no main library is configured), the
+  oldest-indexed copy is kept instead. Deletes in this section fire
+  immediately (no confirmation dialog), per-file, per-group ("Delete other
+  copies"), or for every group at once ("Delete All Non-Canonical Copies").
 
 Both sections delete the file from disk permanently (not to the Trash) and
 remove it from the index — this can't be undone.
+
+### Main library
+
+Check **Main library** next to any configured folder in the Search tab's
+Library Folders panel to designate it as canonical. This is used in two
+places: as the preferred keeper above, and to auto-resolve an otherwise
+ambiguous playlist restore/rebuild match (see "Restoring missing tracks"
+above) — if the same song exists as 2+ physical copies (e.g. across multiple
+NAS snapshots) and exactly one is under the main library, that one is now
+auto-applied instead of being left for manual review. Only one folder can be
+main at a time; unchecking it clears the preference entirely (both features
+fall back to "oldest-indexed"/"still ambiguous" respectively). Defaults to
+this developer's own NAS path until explicitly changed, preserving prior
+behavior for anyone upgrading.
 
 ## Versioning
 

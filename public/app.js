@@ -36,12 +36,25 @@
   const nasStatusText = el("nasStatusText");
   const destPathEl = el("destPath");
   const destFreeEl = el("destFree");
+  const toastEl = el("toast");
+  const contextMenuEl = el("playlistContextMenu");
 
   function showError(message, hint) {
     errorBanner.style.display = "flex";
     errorBanner.innerHTML = `⚠ ${message}${hint ? `<br><code>${hint}</code>` : ""}`;
     nasStatus.querySelector(".dot").classList.add("warn");
     nasStatusText.textContent = "not connected";
+  }
+
+  let toastTimer = null;
+  function showToast(message, { error = false, durationMs = 6000 } = {}) {
+    clearTimeout(toastTimer);
+    toastEl.textContent = message;
+    toastEl.className = "toast" + (error ? " toast-error" : "");
+    toastEl.style.display = "block";
+    toastTimer = setTimeout(() => {
+      toastEl.style.display = "none";
+    }, durationMs);
   }
 
   /** Persisted so the app has something to show immediately on load without
@@ -180,6 +193,14 @@
     return { total: tracks.length, ready, protectedCount, missing };
   }
 
+  /** Matches the naming "Rebuild as enriched copy" always produces
+   * server-side (src/playlistRebuilder.js's chooseRebuildName: "X (Enriched)",
+   * or "X (Enriched) 2" on a collision) — the sidebar groups on this rather
+   * than a separate flag, since the name *is* the source of truth for it. */
+  function isEnrichedCopy(name) {
+    return /\(Enriched\)(\s\d+)?$/.test(String(name || "").trim());
+  }
+
   const CLIENT_RETRY_ATTEMPTS = 3;
   const CLIENT_RETRY_DELAYS_MS = [600, 1800]; // between attempts 1→2 and 2→3
   const MAX_AUTO_HEAL_SWEEPS = 6; // ~2 minutes of periodic retries at 20s each
@@ -250,15 +271,29 @@
   // no local match at all gets an automatic Music.app download attempt.
 
   async function restorePlaylistTracks(id) {
+    const name = playlists.find((p) => p.id === id)?.name || "this playlist";
     restoreState.set(id, { running: true, result: null, error: null });
     renderMain();
+    showToast(`Restoring missing tracks in "${name}"…`);
     try {
       const res = await fetch(`/api/playlists/${encodeURIComponent(id)}/restore`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Restore failed");
       restoreState.set(id, { running: false, result: data, error: null });
+
+      const parts = [];
+      if (data.fixed.length) parts.push(`${data.fixed.length} fixed`);
+      if (data.downloading.length) parts.push(`${data.downloading.length} downloading`);
+      if (data.needsReview.length) parts.push(`${data.needsReview.length} need your input`);
+      if (data.unsupported.length) parts.push(`${data.unsupported.length} couldn't be downloaded`);
+      showToast(
+        parts.length
+          ? `"${name}": ${parts.join(", ")}. See the track list below for exactly what changed.`
+          : `"${name}": nothing to restore — no missing tracks matched locally or needed a download.`
+      );
     } catch (err) {
       restoreState.set(id, { running: false, result: null, error: err.message });
+      showToast(`Restoring "${name}" failed: ${err.message}`, { error: true });
     }
     // The playlist's contents may have changed (tracks added/removed) —
     // force a real refetch rather than trusting the now-stale cached list.
@@ -292,6 +327,99 @@
     const state = restoreState.get(playlistId);
     if (state?.result) {
       state.result.needsReview = state.result.needsReview.filter((r) => r.musicAppId !== musicAppId);
+    }
+  }
+
+  // ---------- Playlist right-click menu (rebuild as enriched copy, delete) ----------
+  // The first entries in what's meant to be an extensible playlist options
+  // menu, not a one-off "delete button" — right-click a playlist in the
+  // sidebar to open it.
+
+  let contextMenuTarget = null; // { id, name } of the playlist the open menu applies to
+
+  function closeContextMenu() {
+    contextMenuEl.style.display = "none";
+    contextMenuEl.innerHTML = "";
+    contextMenuTarget = null;
+  }
+
+  function openContextMenu(x, y, playlist) {
+    contextMenuTarget = playlist;
+    contextMenuEl.innerHTML = `
+      <li><button type="button" data-menu-action="rebuild">Rebuild as enriched copy</button></li>
+      <li class="menu-divider"></li>
+      <li><button type="button" data-menu-action="delete" class="danger">Delete playlist…</button></li>
+    `;
+    contextMenuEl.style.display = "block";
+    // Keep the menu fully on-screen rather than letting it run off the
+    // right/bottom edge when a playlist near the sidebar's edge is clicked.
+    const menuRect = contextMenuEl.getBoundingClientRect();
+    const left = Math.min(x, window.innerWidth - menuRect.width - 8);
+    const top = Math.min(y, window.innerHeight - menuRect.height - 8);
+    contextMenuEl.style.left = `${Math.max(8, left)}px`;
+    contextMenuEl.style.top = `${Math.max(8, top)}px`;
+
+    contextMenuEl.querySelector('[data-menu-action="rebuild"]').addEventListener("click", () => {
+      closeContextMenu();
+      rebuildPlaylistCopy(playlist.id, playlist.name);
+    });
+    contextMenuEl.querySelector('[data-menu-action="delete"]').addEventListener("click", () => {
+      closeContextMenu();
+      deletePlaylistWithConfirm(playlist.id, playlist.name);
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    if (contextMenuTarget && !contextMenuEl.contains(e.target)) closeContextMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && contextMenuTarget) closeContextMenu();
+  });
+  // The sidebar list is rebuilt on every render (see renderSidebar), so a
+  // menu bound to an item that's about to be replaced must close itself
+  // rather than pointing at a detached, stale element.
+  window.addEventListener("scroll", () => contextMenuTarget && closeContextMenu(), true);
+
+  /** Builds a fresh, correctly-ordered copy of the playlist with missing
+   * tracks resolved where possible — see docs/playlists.html#restore for why
+   * this exists as a separate copy instead of fixing order in the original
+   * (Music.app's AppleScript has no way to reposition a track within a
+   * playlist at all). The original is never modified. */
+  async function rebuildPlaylistCopy(id, name) {
+    showToast(`Rebuilding "${name}"…`);
+    try {
+      const res = await fetch(`/api/playlists/${encodeURIComponent(id)}/rebuild`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Rebuild failed");
+
+      const { summary } = data;
+      const parts = [];
+      if (summary.fixed) parts.push(`${summary.fixed} fixed`);
+      if (summary.keptReady) parts.push(`${summary.keptReady} already fine`);
+      if (summary.keptOther) parts.push(`${summary.keptOther} kept as-is`);
+      if (summary.stillMissing) parts.push(`${summary.stillMissing} still missing`);
+      showToast(`Created "${data.newPlaylistName}" — ${parts.join(", ")}.`);
+
+      await refreshPlaylists({ silent: true });
+    } catch (err) {
+      showToast(`Couldn't rebuild "${name}": ${err.message}`, { error: true });
+    }
+  }
+
+  async function deletePlaylistWithConfirm(id, name) {
+    if (!confirm(`Delete "${name}"? This can't be undone from here.`)) return;
+    try {
+      const res = await fetch(`/api/playlists/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      selectedIds.delete(id);
+      trackCache.delete(id);
+      errorCache.delete(id);
+      restoreState.delete(id);
+      showToast(`Deleted "${name}".`);
+      await refreshPlaylists({ silent: true });
+    } catch (err) {
+      showToast(`Couldn't delete "${name}": ${err.message}`, { error: true });
     }
   }
 
@@ -353,8 +481,18 @@
       .map((item) => `<div class="restore-unsupported-item">${item.title || "(untitled)"} — ${escapeAttr(item.reason || "couldn't download")}</div>`)
       .join("");
 
+    // Exactly what changed, not just a count: which track, matched to which
+    // file. filePathBasename mirrors the export table's own filename display.
+    const fixedHtml = r.fixed
+      .map(
+        (item) =>
+          `<div class="restore-fixed-item">✓ ${item.title || "(untitled)"}${item.artist ? ` — ${escapeAttr(item.artist)}` : ""} <span class="restore-fixed-path">→ ${escapeAttr(filePathBasename(item.matchedPath))}</span></div>`
+      )
+      .join("");
+
     return `<tr class="restore-status-row"><td colspan="5">
       <div class="restore-summary">${summary}</div>
+      ${fixedHtml ? `<div class="restore-fixed-list">${fixedHtml}</div>` : ""}
       ${reviewHtml ? `<div class="restore-review-list">${reviewHtml}</div>` : ""}
       ${unsupportedHtml ? `<div class="restore-unsupported-list">${unsupportedHtml}</div>` : ""}
     </td></tr>`;
@@ -436,6 +574,11 @@
     return String(str).replace(/"/g, "&quot;");
   }
 
+  function filePathBasename(path) {
+    if (!path) return "";
+    return path.split("/").pop();
+  }
+
   /** A play button next to a title, wired up to the shared mini-player
    * (public/audioPlayer.js) — disabled with no url when there's nothing
    * playable (protected/missing tracks). */
@@ -503,6 +646,7 @@
         <span class="playlist-name">${p.name}</span>
         <span class="playlist-meta">${p.trackCount} tracks${metaExtra}</span>
       </span>
+      <button type="button" class="playlist-menu-btn" data-playlist-menu title="Playlist options">⋯</button>
     `;
     item.querySelector(".playlist-checkbox").addEventListener("change", (e) => {
       if (e.target.checked) {
@@ -521,6 +665,20 @@
         retryFetch(p.id);
       });
     }
+    item.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY, { id: p.id, name: p.name });
+    });
+    // Right-click's reliability varies across trackpad/mouse setups inside a
+    // native WKWebView (no browser chrome to fall back on) — this button is
+    // the guaranteed, single-click way to reach the same menu, not just a
+    // decorative extra.
+    item.querySelector("[data-playlist-menu]").addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = e.currentTarget.getBoundingClientRect();
+      openContextMenu(rect.right, rect.bottom, { id: p.id, name: p.name });
+    });
     return item;
   }
 
@@ -537,10 +695,17 @@
       return;
     }
 
+    // "Rebuild as enriched copy" always names its output "X (Enriched)" (or
+    // "X (Enriched) 2" on a name collision, see chooseRebuildName server-side)
+    // — grouping on that naming convention needs no extra server-side flag.
+    const enrichedCopies = [];
+    const rest = [];
+    visible.forEach((p) => (isEnrichedCopy(p.name) ? enrichedCopies : rest).push(p));
+
     const exportable = [];
     const blocked = [];
     const unchecked = [];
-    visible.forEach((p) => {
+    rest.forEach((p) => {
       if (trackCache.has(p.id)) {
         (counts(trackCache.get(p.id)).ready > 0 ? exportable : blocked).push(p);
       } else {
@@ -557,6 +722,7 @@
       sortPlaylists(list).forEach((p) => listEl.appendChild(buildPlaylistItem(p)));
     };
 
+    addSection("Enriched copies", "enriched", enrichedCopies);
     addSection("Ready to export", "exportable", exportable);
     addSection("Nothing to export", "blocked", blocked);
     addSection("Not checked yet", "", unchecked);

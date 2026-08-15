@@ -29,17 +29,32 @@ function fieldsToFill(row, newTags) {
   return fields;
 }
 
-async function writeTagsForRow(row, newTags) {
-  if (row.protected) return { written: false, reason: "protected" };
-
+/** Shared guard + dispatch for both write modes below: refuses a protected
+ * file or an unsupported format, then hands the already-decided `fields` to
+ * the right format-specific writer. Neither low-level writer cares whether
+ * `fields` came from a conservative fill-only-if-empty decision or a direct
+ * overwrite — that decision is entirely the caller's, made before this runs. */
+function writeFields(row, fields) {
+  if (row.protected) return Promise.resolve({ written: false, reason: "protected" });
   const ext = (row.extension || "").toLowerCase();
-  if (!WRITABLE_EXTENSIONS.has(ext)) return { written: false, reason: "unsupported-format" };
+  if (!WRITABLE_EXTENSIONS.has(ext)) return Promise.resolve({ written: false, reason: "unsupported-format" });
+  if (Object.keys(fields).length === 0) return Promise.resolve({ written: false, reason: "nothing-missing" });
+  return ext === "mp3" ? writeMp3Tags(row.path, fields) : writeMp4Tags(row.path, fields);
+}
 
-  const fields = fieldsToFill(row, newTags);
-  if (Object.keys(fields).length === 0) return { written: false, reason: "nothing-missing" };
+async function writeTagsForRow(row, newTags) {
+  return writeFields(row, fieldsToFill(row, newTags));
+}
 
-  if (ext === "mp3") return writeMp3Tags(row.path, fields);
-  return writeMp4Tags(row.path, fields);
+/** The manual-correction path (Not Found tab's "Edit Metadata"): unlike
+ * writeTagsForRow, every field in `fields` is written as given, replacing
+ * whatever the file currently has — deliberate, since a human explicitly
+ * typed this in to correct a mistake, not an automated guess that should
+ * only ever fill a gap. Caller is responsible for only including fields the
+ * user actually entered (see the "blank = don't touch" rule in server.js's
+ * manual-metadata route) — every key present here gets overwritten. */
+async function writeTagsOverwrite(row, fields) {
+  return writeFields(row, fields);
 }
 
 /** Reads the whole file into memory, merges tags via node-id3 (which
@@ -126,4 +141,4 @@ function writeMp4Tags(filePath, fields) {
   });
 }
 
-module.exports = { writeTagsForRow, fieldsToFill, WRITABLE_EXTENSIONS };
+module.exports = { writeTagsForRow, writeTagsOverwrite, fieldsToFill, WRITABLE_EXTENSIONS };

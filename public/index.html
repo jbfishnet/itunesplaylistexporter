@@ -30,6 +30,9 @@
     </div>
 
     <div class="error-banner" id="errorBanner" style="display:none;"></div>
+    <div class="toast" id="toast" style="display:none;"></div>
+
+    <ul class="context-menu" id="playlistContextMenu" style="display:none;"></ul>
 
     <div id="playlistsView" class="tab-view active">
       <div class="layout">
@@ -228,6 +231,9 @@
       <div class="main-inner search-inner">
         <div class="library-status-row">
           <p class="library-meta" id="notfoundMeta">Loading…</p>
+          <span id="notfoundSelectedCount" class="library-meta" style="display:none;"></span>
+          <button class="btn" id="notfoundEditSelectedBtn" style="display:none;">Edit Metadata…</button>
+          <button class="btn-danger" id="notfoundDeleteSelectedBtn" style="display:none;">Move Selected to Trash</button>
           <button class="btn" id="notfoundRetryAllBtn">Retry all with improved matching</button>
         </div>
 
@@ -240,15 +246,18 @@
             <table>
               <thead>
                 <tr>
+                  <th class="col-select"><input type="checkbox" id="notfoundSelectAll" title="Select all on this page" /></th>
                   <th>Title</th>
                   <th>Artist</th>
                   <th>Album</th>
                   <th>Genre</th>
                   <th>Format</th>
+                  <th>Duration</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody id="notfoundResultsBody">
-                <tr><td colspan="5" class="empty-state">Loading…</td></tr>
+                <tr><td colspan="8" class="empty-state">Loading…</td></tr>
               </tbody>
             </table>
           </div>
@@ -294,6 +303,25 @@
           <span id="similarPageInfo"></span>
           <button class="link-btn" id="similarNextBtn">Next →</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="progress-overlay" id="metadataEditOverlay">
+    <div class="progress-card">
+      <span class="progress-title" id="metadataEditTitle">Edit metadata</span>
+      <p class="library-meta" id="metadataEditSub"></p>
+      <div class="metadata-edit-fields">
+        <label>Title <input type="text" class="search" id="metaFieldTitle" placeholder="Leave blank to not change" /></label>
+        <label>Artist <input type="text" class="search" id="metaFieldArtist" placeholder="Leave blank to not change" /></label>
+        <label>Album <input type="text" class="search" id="metaFieldAlbum" placeholder="Leave blank to not change" /></label>
+        <label>Genre <input type="text" class="search" id="metaFieldGenre" placeholder="Leave blank to not change" /></label>
+        <label>Year <input type="number" class="search" id="metaFieldYear" placeholder="Leave blank to not change" /></label>
+      </div>
+      <p class="library-meta">Blank fields are left untouched. Filled-in fields overwrite the file's existing tags directly — no confirmation, since this is a deliberate correction. The file is then re-queued for a fresh online lookup using the new details.</p>
+      <div class="progress-actions">
+        <button class="btn" id="metadataEditCancelBtn">Cancel</button>
+        <button class="btn-primary" id="metadataEditSaveBtn">Save &amp; Re-check</button>
       </div>
     </div>
   </div>
