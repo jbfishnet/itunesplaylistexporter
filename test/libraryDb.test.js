@@ -292,6 +292,40 @@ test("getSimilarTitleGroups paginates the (post-filter) qualifying groups", (t) 
   assert.equal(page2.groups.length, 1);
 });
 
+test("isDeletableSimilarFile always keeps the copy under the protected iTunes4TB path, even when it isn't the oldest", (t) => {
+  const db = freshDb(t);
+  const olderId = db.upsertFile({
+    path: "/Volumes/other/Same Title.mp3", size: 100, mtimeMs: 1, extension: "mp3", title: "Same Title", artist: "X", scanId: 1,
+  });
+  const protectedId = db.upsertFile({
+    path: "/Volumes/jb/iTunes4TB/iTunes Media/Music/Artist/Same Title.mp3", size: 200, mtimeMs: 1, extension: "mp3", title: "Same Title", artist: "X", scanId: 1,
+  });
+
+  assert.equal(db.isDeletableSimilarFile(protectedId), false, "the protected-path copy must never be deletable");
+  assert.equal(db.isDeletableSimilarFile(olderId), true, "the non-protected copy is deletable even though it's older");
+});
+
+test("isDeletableSimilarFile falls back to keeping the oldest-indexed copy when no file in the group is under the protected path", (t) => {
+  const db = freshDb(t);
+  const olderId = db.upsertFile({
+    path: "/Volumes/other/a.mp3", size: 100, mtimeMs: 1, extension: "mp3", title: "Elsewhere", artist: "X", scanId: 1,
+  });
+  const newerId = db.upsertFile({
+    path: "/Volumes/other/b.mp3", size: 200, mtimeMs: 1, extension: "mp3", title: "Elsewhere", artist: "X", scanId: 1,
+  });
+
+  assert.equal(db.isDeletableSimilarFile(olderId), false, "oldest copy is the fallback keeper");
+  assert.equal(db.isDeletableSimilarFile(newerId), true);
+});
+
+test("isDeletableSimilarFile refuses when the title no longer has 2+ members, and for unknown ids", (t) => {
+  const db = freshDb(t);
+  const soleId = db.upsertFile({ path: "/a.mp3", size: 100, mtimeMs: 1, extension: "mp3", title: "Lonely Title", artist: "X", scanId: 1 });
+
+  assert.equal(db.isDeletableSimilarFile(soleId), false, "a title with only one file isn't a similar-titles group at all");
+  assert.equal(db.isDeletableSimilarFile(999999), false, "unknown id");
+});
+
 test("works against a real on-disk file, creating parent directories as needed", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ple-libdb-"));
   const dbPath = path.join(dir, "nested", "library.sqlite3");

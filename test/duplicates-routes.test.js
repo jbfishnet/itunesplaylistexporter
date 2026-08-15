@@ -224,6 +224,43 @@ test("DELETE /api/library/files/:id deletes a confirmed duplicate from disk and 
   assert.ok(!browseData.rows.some((r) => r.id === toDelete.id), "deleted file's row must be gone from the index");
 });
 
+test("DELETE /api/library/similar-files/:id deletes the non-keeper copy (no file under the protected path, so the oldest-indexed one is kept)", async () => {
+  const simRes = await fetch(`${BASE_URL}/api/library/similar`);
+  const simData = await simRes.json();
+  const group = simData.groups.find((g) => g.title === "Shared Title");
+  const [keeper, extra] = group.files; // ordered by id ASC — files[0] is the fallback keeper
+
+  assert.ok(fs.existsSync(extra.path));
+
+  const res = await fetch(`${BASE_URL}/api/library/similar-files/${extra.id}`, { method: "DELETE" });
+  const data = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(data.deleted, true);
+  assert.equal(fs.existsSync(extra.path), false, "the deleted copy must actually be gone from disk");
+  assert.ok(fs.existsSync(keeper.path), "the keeper must be untouched");
+});
+
+test("DELETE /api/library/similar-files/:id refuses to delete the keeper itself", async () => {
+  await waitFor(async () => {
+    const res = await fetch(`${BASE_URL}/api/library/browse?title=unique`);
+    const data = await res.json();
+    return data.rows.length === 1;
+  }, "the unique file to be indexed");
+
+  const browseRes = await fetch(`${BASE_URL}/api/library/browse?title=unique`);
+  const { rows } = await browseRes.json();
+  const uniqueFile = rows[0];
+
+  const res = await fetch(`${BASE_URL}/api/library/similar-files/${uniqueFile.id}`, { method: "DELETE" });
+  assert.equal(res.status, 409, "a file with no similar-title siblings at all must be refused");
+  assert.ok(fs.existsSync(path.join(libraryRoot, "unique.mp3")));
+});
+
+test("DELETE /api/library/similar-files/:id 404s for an unknown id", async () => {
+  const res = await fetch(`${BASE_URL}/api/library/similar-files/999999999`, { method: "DELETE" });
+  assert.equal(res.status, 404);
+});
+
 test("DELETE /api/library/files/:id 404s for an unknown id", async () => {
   const res = await fetch(`${BASE_URL}/api/library/files/999999999`, { method: "DELETE" });
   assert.equal(res.status, 404);

@@ -22,11 +22,22 @@
   const similarPageInfoEl = el("similarPageInfo");
   const similarPrevBtn = el("similarPrevBtn");
   const similarNextBtn = el("similarNextBtn");
+  const similarDeleteAllBtn = el("similarDeleteAllBtn");
 
   const PAGE_SIZE = 20;
   const BULK_FETCH_PAGE_SIZE = 100;
   let offset = 0;
   let similarOffset = 0;
+
+  // Mirrors the server-side keeper rule in libraryDb.js's resolveKeeperId:
+  // prefer the copy under the canonical archive path, else the oldest-indexed
+  // one (group.files already arrives ordered by id ASC, so files[0] is that
+  // fallback) — kept in sync with the server, which re-derives and enforces
+  // this independently on every delete request regardless of what the client sends.
+  const PROTECTED_KEEP_PATH_PREFIX = "/Volumes/jb/iTunes4TB/iTunes Media/Music";
+  function resolveKeeperFile(files) {
+    return files.find((f) => f.path.startsWith(PROTECTED_KEEP_PATH_PREFIX)) || files[0];
+  }
 
   const FIELD_LABELS = {
     artist: "Artist",
@@ -288,6 +299,7 @@
       data.total === 0
         ? "Nothing here — every shared title is either an exact duplicate (see above) or fully consistent."
         : `${data.total} title${titlePlural} shared by files that differ in some other way.`;
+    similarDeleteAllBtn.disabled = data.total === 0;
 
     const from = data.total === 0 ? 0 : similarOffset + 1;
     const to = Math.min(similarOffset + PAGE_SIZE, data.total);
@@ -303,35 +315,151 @@
     similarGroupsEl.innerHTML = data.groups
       .map((group) => {
         const fieldLabels = group.diffFields.map((f) => FIELD_LABELS[f] || f).join(", ");
+        const keeper = resolveKeeperFile(group.files);
         const rows = group.files
           .map((file) => {
+            const kept = file.id === keeper.id;
             const metaParts = group.diffFields.map(
               (field) => `<span class="diff">${FIELD_LABELS[field] || field}: ${formatFieldValue(field, file)}</span>`
             );
             return `
-            <div class="dup-file-row">
+            <div class="dup-file-row${kept ? " kept" : ""}" data-file-id="${file.id}">
               ${playButtonHtml(file)}
               ${revealButtonHtml(file)}
+              ${kept ? "" : deleteButtonHtml(file)}
               ${folderSwatchHtml(file)}
               <span class="dup-file-path">${file.path}</span>
               <span class="dup-file-meta">${metaParts.join("")}</span>
+              ${kept ? `<span class="keep-badge">kept</span>` : ""}
             </div>`;
           })
           .join("");
         return `
-        <div class="dup-group">
+        <div class="dup-group" data-title="${escapeAttr(group.title)}">
           <div class="dup-group-head">
             <span class="dup-group-title">${group.title}</span>
             <span class="dup-group-sub">${group.files.length} files · differs in ${fieldLabels}</span>
           </div>
           ${rows}
+          <div class="dup-group-actions">
+            <button type="button" class="btn-danger similar-group-delete-btn">Delete other copies</button>
+          </div>
         </div>`;
       })
       .join("");
 
     bindPlayButtons(similarGroupsEl);
     bindRevealButtons(similarGroupsEl);
+    bindSimilarDeleteButtons(similarGroupsEl);
+    similarGroupsEl.querySelectorAll(".dup-group").forEach(bindSimilarGroup);
   }
+
+  function deleteButtonHtml(file) {
+    return `<button type="button" class="delete-file-btn" data-delete-similar-id="${file.id}" title="Delete this copy">✕</button>`;
+  }
+
+  /** Fires the delete immediately, no confirm() — per the "delete without
+   * asking" behavior requested for this section. The server independently
+   * re-verifies the file isn't the keeper before actually deleting it
+   * (see isDeletableSimilarFile), so a stale/racing client can't remove the
+   * protected copy even if this button somehow rendered on it. */
+  async function deleteSimilarFile(id) {
+    const res = await fetch(`/api/library/similar-files/${id}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Delete failed");
+    return data;
+  }
+
+  function bindSimilarDeleteButtons(container) {
+    container.querySelectorAll(".delete-file-btn[data-delete-similar-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.deleteSimilarId;
+        const row = btn.closest(".dup-file-row");
+        btn.disabled = true;
+        try {
+          await deleteSimilarFile(id);
+          row.remove();
+        } catch (err) {
+          similarMetaEl.textContent = `Couldn't delete: ${err.message}`;
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  function bindSimilarGroup(groupEl) {
+    const btn = groupEl.querySelector(".similar-group-delete-btn");
+    btn.addEventListener("click", async () => {
+      const rows = [...groupEl.querySelectorAll(".dup-file-row:not(.kept)")];
+      if (rows.length === 0) return;
+      btn.disabled = true;
+      btn.textContent = "Deleting…";
+      const failures = [];
+      for (const row of rows) {
+        try {
+          await deleteSimilarFile(row.dataset.fileId);
+          row.remove();
+        } catch (err) {
+          failures.push(err.message);
+        }
+      }
+      if (failures.length) {
+        similarMetaEl.textContent = `Some deletions failed: ${failures.join("; ")}`;
+        btn.disabled = false;
+        btn.textContent = "Delete other copies";
+      } else {
+        btn.remove(); // nothing left to delete in this group
+      }
+    });
+  }
+
+  /** Every non-keeper file across every Similar Titles group, on every page —
+   * same fetch-all-pages approach as fetchAllExtraFileIds above. */
+  async function fetchAllNonKeeperSimilarIds() {
+    const ids = [];
+    let cursor = 0;
+    let total = Infinity;
+    while (cursor < total) {
+      const res = await fetch(`/api/library/similar?limit=${BULK_FETCH_PAGE_SIZE}&offset=${cursor}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to load similar titles");
+      total = data.total;
+      if (data.groups.length === 0) break;
+      for (const group of data.groups) {
+        const keeper = resolveKeeperFile(group.files);
+        ids.push(...group.files.filter((f) => f.id !== keeper.id).map((f) => f.id));
+      }
+      cursor += BULK_FETCH_PAGE_SIZE;
+    }
+    return ids;
+  }
+
+  similarDeleteAllBtn.addEventListener("click", async () => {
+    similarDeleteAllBtn.disabled = true;
+    try {
+      const ids = await fetchAllNonKeeperSimilarIds();
+      let failed = 0;
+      for (let i = 0; i < ids.length; i += 1) {
+        similarDeleteAllBtn.textContent = `Deleting ${i + 1}/${ids.length}…`;
+        try {
+          await deleteSimilarFile(ids[i]);
+        } catch {
+          failed += 1;
+        }
+      }
+      const noun = ids.length === 1 ? "copy" : "copies";
+      similarMetaEl.textContent =
+        failed > 0
+          ? `Deleted ${ids.length - failed} of ${ids.length} non-canonical copies — ${failed} failed.`
+          : `Deleted ${ids.length} non-canonical ${noun}.`;
+    } catch (err) {
+      similarMetaEl.textContent = `Couldn't delete all non-canonical copies: ${err.message}`;
+    } finally {
+      similarDeleteAllBtn.textContent = "Delete All Non-Canonical Copies";
+      similarOffset = 0;
+      loadSimilar();
+    }
+  });
 
   similarPrevBtn.addEventListener("click", () => {
     similarOffset = Math.max(0, similarOffset - PAGE_SIZE);

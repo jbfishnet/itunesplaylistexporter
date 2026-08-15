@@ -381,6 +381,27 @@ tbody tr.status-missing { border-left-color: var(--warning); background: color-m
 
 tr.group-row td { background: var(--surface-2); font-family: var(--font-display); font-weight: 700; font-size: 12.5px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 tr.group-row .group-count { font-weight: 500; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+tr.group-row .restore-btn { margin-left: 10px; }
+
+.restore-btn {
+  border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  padding: 3px 10px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: var(--font-body);
+}
+.restore-btn:hover { background: var(--surface-3); }
+.restore-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, var(--surface)); padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.restore-status.error { color: var(--danger); font-size: 12.5px; }
+.restore-summary { font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+.restore-review-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.restore-review-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 12px; }
+.restore-review-title { font-weight: 600; }
+.restore-review-artist { font-weight: 400; color: var(--text-muted); margin-left: 4px; }
+.restore-review-candidates { display: flex; flex-wrap: wrap; gap: 10px; }
+.restore-use-btn { color: var(--success); }
+.restore-skip-btn { color: var(--text-faint); }
+.restore-unsupported-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.restore-unsupported-item { font-size: 11.5px; color: var(--text-muted); }
 
 .empty-state { padding: 48px 20px; text-align: center; color: var(--text-muted); font-size: 13.5px; }
 
@@ -514,6 +535,26 @@ tr.group-row .group-count { font-weight: 500; color: var(--text-muted); font-var
 }
 .reveal-btn:hover { background: var(--surface-3); }
 .reveal-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.delete-file-btn {
+  border: none;
+  background: var(--surface-2);
+  color: var(--danger);
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+  margin-right: 6px;
+}
+.delete-file-btn:hover { background: var(--danger); color: #fff; }
+.delete-file-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .title-cell { display: flex; align-items: center; gap: 0; }
 .title-cell .track-title, .title-cell .track-sub { display: block; }

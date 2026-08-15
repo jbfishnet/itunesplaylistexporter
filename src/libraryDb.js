@@ -460,6 +460,31 @@ function openLibraryDb(dbPath) {
     return { total: qualifying.length, groups: qualifying.slice(offset, offset + limit) };
   }
 
+  // The one file in a similar-titles group that deletion must never touch —
+  // prefer whichever copy lives under the user's canonical archive path, and
+  // fall back to the oldest-indexed row (same rule Exact Duplicates already
+  // uses) when nothing in the group is under that path.
+  const PROTECTED_KEEP_PATH_PREFIX = "/Volumes/jb/iTunes4TB/iTunes Media/Music";
+
+  function resolveKeeperId(rows) {
+    const protectedRow = rows.find((r) => r.path.startsWith(PROTECTED_KEEP_PATH_PREFIX));
+    if (protectedRow) return protectedRow.id;
+    return rows.reduce((oldest, r) => (r.id < oldest.id ? r : oldest)).id;
+  }
+
+  /** Safety guard for Similar Titles deletion, mirroring isPartOfDuplicateGroup
+   * above: re-derives the keeper from the *current* DB state on every call —
+   * never trusts a client-supplied "this is safe to delete" claim. Refuses
+   * for the keeper itself and for any file whose title no longer has 2+
+   * members (already resolved, or never qualified). */
+  function isDeletableSimilarFile(id) {
+    const row = stmts.getById.get(id);
+    if (!row || !row.title) return false;
+    const rows = preparedFor("SELECT * FROM files WHERE title = ? COLLATE NOCASE ORDER BY id ASC").all(row.title);
+    if (rows.length < 2) return false;
+    return resolveKeeperId(rows) !== id;
+  }
+
   const BROWSE_SORT_COLUMNS = new Set([
     "id", "title", "artist", "album", "genre", "year", "extension", "enrichment_status", "updated_at", "enriched_at",
   ]);
@@ -602,6 +627,7 @@ function openLibraryDb(dbPath) {
     isPartOfDuplicateGroup,
     deleteFileRow,
     getSimilarTitleGroups,
+    isDeletableSimilarFile,
     getIdByPath: (p) => stmts.getIdByPath.get(p)?.id ?? null,
     getFileByPath: (p) => stmts.getFileByPath.get(p),
     getById: (id) => stmts.getById.get(id),

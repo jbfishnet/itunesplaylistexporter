@@ -23,10 +23,19 @@ try {
   // no .env file — fine, nothing to load
 }
 
-const musicLibrary = require("./src/musicLibrary");
+// Swappable only for tests (see test/playlist-restore-routes.test.js): the
+// restore routes below are the only code in this app that writes to the
+// user's real Music.app library, and that can't be exercised against a real
+// Music.app in CI — a test fixture can point this at a fake implementation
+// instead via PLE_TEST_MUSIC_LIBRARY. Every other route keeps talking to the
+// real musicLibrary module exactly as before.
+const musicLibrary = process.env.PLE_TEST_MUSIC_LIBRARY
+  ? require(path.resolve(process.env.PLE_TEST_MUSIC_LIBRARY))
+  : require("./src/musicLibrary");
 const trackStatus = require("./src/trackStatus");
 const folderPicker = require("./src/folderPicker");
 const exporter = require("./src/exporter");
+const playlistRestorer = require("./src/playlistRestorer");
 const { openLibraryDb } = require("./src/libraryDb");
 const { createScheduler } = require("./src/libraryScheduler");
 const { createEnrichmentQueue } = require("./src/enrichmentQueue");
@@ -146,6 +155,94 @@ app.get("/api/playlists/:id/tracks", async (req, res) => {
   try {
     const rawTracks = await musicLibrary.getPlaylistTracks(req.params.id);
     res.json(classifiedTracks(rawTracks));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function trackSummary(track, extra = {}) {
+  return { position: track.position, musicAppId: track.musicAppId, title: track.title, artist: track.artist, ...extra };
+}
+
+function candidateSummary(file) {
+  return { id: file.id, path: file.path, title: file.title, artist: file.artist, album: file.album };
+}
+
+// The first write path into the user's real Music library this app has ever
+// had. For every currently-missing track: an exact (title+artist) local-index
+// match is auto-applied (imported into the library + added to the playlist,
+// then the broken entry removed) without asking; an ambiguous match is left
+// for the client to resolve via /restore/apply; no local match at all gets an
+// automatic Music.app download attempt, which may not be supported on every
+// macOS/Music.app version (see musicLibrary.attemptDownload).
+app.post("/api/playlists/:id/restore", async (req, res) => {
+  const playlistId = req.params.id;
+  try {
+    const rawTracks = await musicLibrary.getPlaylistTracks(playlistId);
+    const tracks = classifiedTracks(rawTracks);
+    const { fixed, needsReview, noLocalMatch } = playlistRestorer.restorePlaylist({ tracks, libraryDb });
+
+    const fixedResults = [];
+    const needsReviewResults = needsReview.map(({ track, candidates }) =>
+      trackSummary(track, { candidates: candidates.map(candidateSummary) })
+    );
+
+    for (const { track, file } of fixed) {
+      try {
+        await musicLibrary.addFileToPlaylist(playlistId, file.path);
+        if (track.musicAppId) await musicLibrary.removeTrackFromPlaylist(playlistId, track.musicAppId);
+        fixedResults.push(trackSummary(track, { matchedPath: file.path }));
+      } catch (err) {
+        // The write failed (Music.app busy, file went away, etc.) — fall back
+        // to surfacing it as reviewable rather than silently dropping it.
+        needsReviewResults.push(trackSummary(track, { candidates: [candidateSummary(file)], error: err.message }));
+      }
+    }
+
+    const downloading = [];
+    const unsupported = [];
+    for (const track of noLocalMatch) {
+      if (!track.musicAppId) {
+        unsupported.push(trackSummary(track, { reason: "No Music.app track reference available" }));
+        continue;
+      }
+      try {
+        await musicLibrary.attemptDownload(playlistId, track.musicAppId);
+        downloading.push(trackSummary(track));
+      } catch (err) {
+        unsupported.push(trackSummary(track, { reason: err.message }));
+      }
+    }
+
+    res.json({
+      fixed: fixedResults,
+      needsReview: needsReviewResults,
+      downloading,
+      unsupported,
+      libraryIndexAvailable: Boolean(libraryDb),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Applies a specific candidate the user picked for one ambiguous match from
+// the /restore response above.
+app.post("/api/playlists/:id/restore/apply", async (req, res) => {
+  const playlistId = req.params.id;
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+
+  const fileId = parseInt(req.body?.fileId, 10);
+  const trackMusicAppId = req.body?.trackMusicAppId;
+  if (!Number.isFinite(fileId)) return res.status(400).json({ error: "fileId is required" });
+
+  const file = libraryDb.getById(fileId);
+  if (!file) return res.status(404).json({ error: "File not found in the index" });
+
+  try {
+    await musicLibrary.addFileToPlaylist(playlistId, file.path);
+    if (trackMusicAppId) await musicLibrary.removeTrackFromPlaylist(playlistId, trackMusicAppId);
+    res.json({ applied: true, path: file.path });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -599,6 +696,32 @@ app.delete("/api/library/files/:id", (req, res) => {
       return;
     }
     // ENOENT (already gone) is fine — the index row is stale either way and should go.
+    libraryDb.deleteFileRow(id);
+    res.json({ deleted: true, path: row.path });
+  });
+});
+
+// Similar Titles' delete path: unlike the exact-duplicate route above, these
+// files were never confirmed byte-identical, so the guard here isn't "does
+// a twin exist" but "is this NOT the keeper" — libraryDb.isDeletableSimilarFile
+// re-derives the keeper (protected path, else oldest-indexed) from the
+// current DB state on every call, same never-trust-the-client posture.
+app.delete("/api/library/similar-files/:id", (req, res) => {
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid file id" });
+
+  const row = libraryDb.getById(id);
+  if (!row) return res.status(404).json({ error: "File not found in the index" });
+  if (!libraryDb.isDeletableSimilarFile(id)) {
+    return res.status(409).json({ error: "This file is the protected/kept copy, or no longer part of a similar-titles group — refresh and try again" });
+  }
+
+  fs.unlink(row.path, (err) => {
+    if (err && err.code !== "ENOENT") {
+      res.status(500).json({ error: `Couldn't delete the file from disk: ${err.message}` });
+      return;
+    }
     libraryDb.deleteFileRow(id);
     res.json({ deleted: true, path: row.path });
   });
