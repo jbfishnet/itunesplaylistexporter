@@ -293,6 +293,23 @@ body {
   color: var(--text-faint);
 }
 
+.section-heading.enriched { flex-wrap: wrap; }
+.enriched-multiselect-btn {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+.enriched-multiselect-btn:hover,
+.enriched-multiselect-btn[aria-pressed="true"] { color: var(--accent-strong); border-color: var(--accent); }
+
 .section-heading.exportable { color: var(--success); }
 .section-heading.blocked { color: var(--text-faint); }
 .section-heading.enriched { color: var(--accent-strong); }

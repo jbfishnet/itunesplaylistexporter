@@ -1,6 +1,14 @@
 {
   "releases": [
     {
+      "version": "1.2.6",
+      "date": "2026-11-01",
+      "changes": [
+        "Enriched copies now select and preview individually with one click by default.",
+        "Added an explicit multi-select toggle for selecting several enriched copies together."
+      ]
+    },
+    {
       "version": "1.2.5",
       "date": "2026-11-01",
       "changes": [
