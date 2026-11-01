@@ -47,6 +47,15 @@
         Full-text search across title/artist/album/genre, and always the
         filename/folder too — so even a completely untagged file is still findable.
       </p>
+      <p>
+        Search results can be previewed in the app. Starting a preview first pauses
+        Music.app if it is currently playing. To add a result, select a Music.app
+        playlist; after two seconds the file is imported and added automatically.
+        The app verifies the new playlist entry with Music.app, then refreshes its
+        playlist count and track list. DRM-protected files can't be previewed or added
+        this way. Adding uses macOS Automation permission for Music.app; preview
+        playback does not pause browser radio or playback in other apps.
+      </p>
 
       <h2 id="enrichment">Metadata enrichment</h2>
       <p>
@@ -90,6 +99,17 @@
         Files whose iTunes lookup found nothing plausible are terminal ("not_found")
         rather than retried forever — they're listed in the Not Found tab, and can be
         requeued in bulk after a matching-logic improvement ships.
+      </p>
+      <p>
+        When text search finds no plausible result, the enrichment queue can also
+        fingerprint the audio locally with Chromaprint and query AcoustID. The
+        native app stores an optional free AcoustID application key in macOS
+        Keychain; only the fingerprint and duration are sent to AcoustID, not the
+        audio file. The Configuration page can test the key using a synthetic
+        silence fingerprint, and warns when the key is missing or rejected.
+        AcoustID's catalog is community-built and is not as broad as Shazam's.
+        Without a key, this fallback is disabled. A single Not Found track can
+        be selected and retried immediately after configuring the key.
       </p>
     </main>
   </div>

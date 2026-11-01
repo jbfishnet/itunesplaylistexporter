@@ -160,6 +160,7 @@ function createEnrichmentQueue({
   fetchFn = globalThis.fetch,
   intervalMs = DEFAULT_INTERVAL_MS,
   retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS,
+  identifyByFingerprintFn = identifyByFingerprint,
 }) {
   const state = { processed: 0, enriched: 0, notFound: 0, lastError: null };
   let timer = null;
@@ -175,12 +176,15 @@ function createEnrichmentQueue({
     return Array.isArray(data.results) ? data.results : [];
   }
 
-  async function processOne() {
+  async function processOne(preferredId = null) {
     if (busy) return { processed: false };
     busy = true;
     try {
-      const [row] = db.getEnrichmentBacklog(1);
+      const row = preferredId === null
+        ? db.getEnrichmentBacklog(1)[0]
+        : db.getById(preferredId);
       if (!row) return { processed: false };
+      if (preferredId !== null && row.enrichment_status !== "pending") return { processed: false };
 
       let results;
       try {
@@ -203,7 +207,7 @@ function createEnrichmentQueue({
       // AcoustID fingerprinting instead, if it's configured (see acoustId.js;
       // a no-op with no API key/fpcalc installed, same as today's behavior).
       if (!tags) {
-        tags = await identifyByFingerprint(row.path);
+        tags = await identifyByFingerprintFn(row.path);
       }
 
       state.processed += 1;

@@ -4,13 +4,20 @@
 # background until you open it (or a browser tab) again.
 set -euo pipefail
 
-LABEL="com.janboike.playlistexporter.server"
-DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
+GUI_DOMAIN="gui/$(id -u)"
+LABELS=("com.janboike.playlistexporter.app" "com.janboike.playlistexporter.server")
 
-if [ -f "$DEST" ]; then
-  launchctl unload "$DEST" 2>/dev/null || true
-  rm -f "$DEST"
-  echo "Removed autostart: $LABEL"
-else
+removed=0
+for LABEL in "${LABELS[@]}"; do
+  DEST="$HOME/Library/LaunchAgents/$LABEL.plist"
+  if [ -f "$DEST" ]; then
+    launchctl bootout "$GUI_DOMAIN" "$DEST" 2>/dev/null || true
+    rm -f "$DEST"
+    echo "Removed autostart: $LABEL"
+    removed=1
+  fi
+done
+
+if [ "$removed" -eq 0 ]; then
   echo "Autostart wasn't installed — nothing to do."
 fi

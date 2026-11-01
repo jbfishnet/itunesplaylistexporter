@@ -1,0 +1,23 @@
+{
+  "releases": [
+    {
+      "version": "1.2.1",
+      "date": "2026-11-01",
+      "changes": [
+        "Added Not Found track duration and metadata editing with automatic Music.app import or optional playlist selection.",
+        "Added optional AcoustID audio fingerprint matching with a macOS Keychain-stored API key, connection validation, configuration warnings, and one-track retries."
+      ]
+    },
+    {
+      "version": "1.2.0",
+      "date": "2026-11-01",
+      "changes": [
+        "Added a native macOS menu-bar app with background mode and login startup.",
+        "Added configurable macOS notifications for export, scan, and playlist events.",
+        "Added an in-app Release Notes page showing the build time.",
+        "Search previews now pause Music.app, and search results can be added to Music.app playlists.",
+        "Selecting a playlist in Search auto-adds the track after two seconds, verifies it in Music.app, and refreshes the local playlist view."
+      ]
+    }
+  ]
+}

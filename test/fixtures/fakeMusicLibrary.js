@@ -16,11 +16,14 @@ let state = {
   tracksByPlaylist: {},
   downloadShouldFail: new Set(),
   deletedPlaylistIds: new Set(),
+  addVisible: true,
   nextId: 90000,
   playlists: [],
 };
 const calls = {
+  pausePlaybackIfPlaying: [],
   addFileToPlaylist: [],
+  addFileToLibrary: [],
   removeTrackFromPlaylist: [],
   attemptDownload: [],
   createPlaylist: [],
@@ -37,6 +40,11 @@ function listPlaylists() {
   return Promise.resolve(state.playlists.map((p) => ({ ...p })));
 }
 
+function pausePlaybackIfPlaying() {
+  calls.pausePlaybackIfPlaying.push(true);
+  return Promise.resolve(true);
+}
+
 function getPlaylistTracks(playlistId) {
   const tracks = state.tracksByPlaylist[String(playlistId)] || [];
   return Promise.resolve(tracks.map((t) => ({ ...t })));
@@ -44,6 +52,7 @@ function getPlaylistTracks(playlistId) {
 
 function addFileToPlaylist(playlistId, filePath) {
   calls.addFileToPlaylist.push({ playlistId: String(playlistId), filePath });
+  if (!state.addVisible) return Promise.resolve();
   const key = String(playlistId);
   const list = state.tracksByPlaylist[key] || (state.tracksByPlaylist[key] = []);
   list.push({
@@ -55,7 +64,28 @@ function addFileToPlaylist(playlistId, filePath) {
     kind: "MPEG-Audiodatei",
     location: filePath,
   });
+  const playlist = state.playlists.find((item) => String(item.id) === key);
+  if (playlist) playlist.trackCount = list.length;
   return Promise.resolve();
+}
+
+function addFileToLibrary(filePath) {
+  calls.addFileToLibrary.push({ filePath });
+  const existing = Object.values(state.tracksByPlaylist).flat().some((track) => track.location === filePath);
+  if (!existing && state.addVisible) {
+    state.tracksByPlaylist.library = state.tracksByPlaylist.library || [];
+    state.tracksByPlaylist.library.push({
+      position: state.tracksByPlaylist.library.length + 1,
+      musicAppId: nextId(),
+      title: path.basename(filePath, path.extname(filePath)),
+      artist: null,
+      album: null,
+      kind: "MPEG-Audiodatei",
+      location: filePath,
+    });
+  }
+  if (!state.addVisible) return Promise.reject(new Error("Music.app did not confirm the library import"));
+  return Promise.resolve({ added: !existing, alreadyPresent: existing, verified: true });
 }
 
 function removeTrackFromPlaylist(playlistId, musicAppTrackId) {
@@ -111,8 +141,10 @@ function deletePlaylist(playlistId) {
 
 module.exports = {
   listPlaylists,
+  pausePlaybackIfPlaying,
   getPlaylistTracks,
   addFileToPlaylist,
+  addFileToLibrary,
   removeTrackFromPlaylist,
   attemptDownload,
   createPlaylist,
@@ -130,9 +162,12 @@ module.exports = {
   __setPlaylists(playlists) {
     state.playlists = playlists;
   },
+  __setAddVisible(visible) {
+    state.addVisible = visible;
+  },
   __calls: calls,
   __reset() {
-    state = { tracksByPlaylist: {}, downloadShouldFail: new Set(), deletedPlaylistIds: new Set(), nextId: 90000, playlists: [] };
+    state = { tracksByPlaylist: {}, downloadShouldFail: new Set(), deletedPlaylistIds: new Set(), addVisible: true, nextId: 90000, playlists: [] };
     for (const key of Object.keys(calls)) calls[key].length = 0;
   },
 };

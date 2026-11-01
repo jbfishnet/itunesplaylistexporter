@@ -25,15 +25,16 @@
     </nav>
     <main>
       <h1>Native macOS App</h1>
-      <p class="page-sub">A real Dock-icon app around the same local server — Swift + WKWebView, no browser tab.</p>
+      <p class="page-sub">A native macOS app with a Dock icon, menu-bar item, native notifications, and a Swift + WKWebView interface.</p>
 
       <h2>What it is</h2>
       <p>
         <code>macapp/main.swift</code> is a thin native window: a plain
         <code>WKWebView</code> with no browser chrome, pointed at the same local
         Express server everything else runs on. Opening it starts <code>server.js</code>
-        automatically if it isn't already running; closing or quitting the app leaves
-        the server process running in the background, so the next launch is instant.
+        automatically if it isn't already running. Closing the window hides it while
+        the app and its menu-bar item continue running; choose <strong>Quit Playlist
+        Exporter</strong> in the menu-bar menu or press <kbd>Cmd+Q</kbd> to exit.
       </p>
       <p>Build and install it:</p>
       <pre><code>cd macapp
@@ -62,15 +63,19 @@ cp -R "dist/Playlist Exporter.app" /Applications/</code></pre>
         <li>The search index and logs live under <code>~/Library/Application Support/Playlist Exporter</code> and <code>~/Library/Logs/Playlist Exporter</code> — the app bundle itself isn't writable once installed.</li>
       </ul>
 
-      <h2>Optional autostart</h2>
+      <h2>Menu-bar app and autostart</h2>
       <p>
-        <code>macapp/install-autostart.sh</code> installs a LaunchAgent that runs the
-        server headlessly at every login (<code>uninstall-autostart.sh</code> removes
-        it). It generates its plist from the actually-installed app and the current
-        user's discovered Node path at install time — never a static, machine-specific
-        file — so it's portable the same way the app itself is. The app window works
-        fine with or without this; it just skips the cold-start delay when the
-        LaunchAgent is already running.
+        The status-bar icon menu opens or quits the app. Closing the main window keeps
+        the app running in the menu bar, where it can continue to deliver notifications.
+        The <strong>Notifications</strong> tab lets you choose which export, library
+        scan, and playlist events produce native macOS notifications and request
+        notification permission.
+      </p>
+      <p>
+        <code>macapp/install-autostart.sh</code> installs a LaunchAgent that starts the
+        app in menu-bar-only mode at login; <code>uninstall-autostart.sh</code> removes
+        it. The app starts the bundled local server itself, and the window stays hidden
+        until you choose <strong>Open Playlist Exporter</strong> from the status-bar menu.
       </p>
 
       <div class="callout callout-limitation">
@@ -91,12 +96,14 @@ cp -R "dist/Playlist Exporter.app" /Applications/</code></pre>
       <h2>Versioning</h2>
       <p>
         <code>package.json</code>'s <code>version</code> field is the single source of
-        truth — nowhere else hard-codes a version number. It shows up in three places:
+        truth — nowhere else hard-codes a version number. It appears in the UI,
+        bundle metadata, and build artifact:
       </p>
       <ul>
         <li>The web UI, next to the app name, fetched live from <code>GET /api/app-info</code>.</li>
         <li>The native app's <code>Info.plist</code> (<code>CFBundleVersion</code>/<code>CFBundleShortVersionString</code>) — <strong>About Playlist Exporter</strong> and Finder's <strong>Get Info</strong> show it for free.</li>
         <li>The CI build artifact's name (<code>Playlist Exporter-vX.Y.Z</code>).</li>
+        <li>The in-app <strong>Release Notes</strong> tab displays the maintained release history and each build's generated UTC timestamp.</li>
       </ul>
     </main>
   </div>

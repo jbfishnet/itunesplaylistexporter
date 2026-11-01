@@ -19,10 +19,12 @@
   const deleteSelectedBtn = el("notfoundDeleteSelectedBtn");
   const editSelectedBtn = el("notfoundEditSelectedBtn");
   const guessSelectedBtn = el("notfoundGuessSelectedBtn");
+  const retrySelectedBtn = el("notfoundRetrySelectedBtn");
 
   const metadataEditOverlay = el("metadataEditOverlay");
   const metadataEditTitle = el("metadataEditTitle");
   const metadataEditSub = el("metadataEditSub");
+  const metadataPlaylistSelect = el("metadataPlaylistSelect");
   const metadataEditCancelBtn = el("metadataEditCancelBtn");
   const metadataEditSaveBtn = el("metadataEditSaveBtn");
   const metaFieldTitle = el("metaFieldTitle");
@@ -39,6 +41,7 @@
   // it's deleted, so there's no meaningful "selected across every page" any
   // list mutation wouldn't immediately invalidate. Cleared on every reload.
   const selectedIds = new Set();
+  let playlistLoadPromise = null;
 
   function escapeAttr(str) {
     return String(str).replace(/"/g, "&quot;");
@@ -110,6 +113,7 @@
     deleteSelectedBtn.style.display = count > 0 ? "" : "none";
     editSelectedBtn.style.display = count > 0 ? "" : "none";
     guessSelectedBtn.style.display = count > 0 ? "" : "none";
+    retrySelectedBtn.style.display = count === 1 ? "" : "none";
     const rowCheckboxes = resultsBody.querySelectorAll(".notfound-row-checkbox");
     selectAllEl.checked = rowCheckboxes.length > 0 && Array.from(rowCheckboxes).every((cb) => cb.checked);
     selectAllEl.indeterminate = count > 0 && !selectAllEl.checked;
@@ -170,7 +174,33 @@
     metaFieldGenre.value = single ? singleRow.genre || "" : "";
     metaFieldYear.value = single ? singleRow.year || "" : "";
     metadataEditOverlay.classList.add("open");
+    loadMetadataPlaylists();
     metaFieldTitle.focus();
+  }
+
+  async function loadMetadataPlaylists() {
+    if (playlistLoadPromise) return playlistLoadPromise;
+    playlistLoadPromise = (async () => {
+      try {
+        const res = await fetch("/api/playlists");
+        const playlists = await res.json();
+        if (!res.ok) throw new Error(playlists.error || "Failed to load playlists");
+        const selected = metadataPlaylistSelect.value;
+        metadataPlaylistSelect.replaceChildren(new Option("Music library only (default)", ""));
+        for (const playlist of playlists) {
+          metadataPlaylistSelect.add(new Option(playlist.name, String(playlist.id)));
+        }
+        if (playlists.some((playlist) => String(playlist.id) === selected)) {
+          metadataPlaylistSelect.value = selected;
+        }
+      } catch (err) {
+        metadataEditSub.textContent =
+          `Couldn't load Music.app playlists: ${err.message}. The default Music library import remains available.`;
+      } finally {
+        playlistLoadPromise = null;
+      }
+    })();
+    return playlistLoadPromise;
   }
 
   function closeMetadataEdit() {
@@ -284,19 +314,31 @@
       const res = await fetch("/api/library/not-found-files/manual-metadata", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: editingIds, metadata }),
+        body: JSON.stringify({
+          ids: editingIds,
+          metadata,
+          playlistId: metadataPlaylistSelect.value || null,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Save failed");
       closeMetadataEdit();
       selectedIds.clear();
-      metaEl.textContent = `Updated ${data.requeued} track${data.requeued === 1 ? "" : "s"} — re-queued for another online lookup with the new details.`;
+      const importErrors = data.results.filter((result) => result.musicError);
+      const destination = data.playlist ? ` in "${data.playlist.name}"` : " to the Music library";
+      const importSummary =
+        `${data.musicAdded} added${data.musicAlreadyPresent ? `, ${data.musicAlreadyPresent} already present` : ""}` +
+        `${data.musicFailed ? `, ${data.musicFailed} failed` : ""}`;
+      const errorDetails = importErrors.map((result) => `Track ${result.id}: ${result.musicError}`).join("; ");
+      metaEl.textContent =
+        `Updated ${data.requeued} track${data.requeued === 1 ? "" : "s"} and re-queued for another lookup; ` +
+        `${importSummary}${destination}.${errorDetails ? ` ${errorDetails}` : ""}`;
       loadNotFound();
     } catch (err) {
       metadataEditSub.textContent = `Couldn't save: ${err.message}`;
     } finally {
       metadataEditSaveBtn.disabled = false;
-      metadataEditSaveBtn.textContent = "Save & Re-check";
+      metadataEditSaveBtn.textContent = "Save & Add to Music";
     }
   });
 
@@ -330,11 +372,11 @@
         <tr>
           <td class="col-select"><input type="checkbox" class="notfound-row-checkbox" data-row-id="${r.id}" /></td>
           <td><div class="title-cell">${playButtonHtml(r)}${revealButtonHtml(r)}<span><div class="track-title">${r.title || "(untitled)"}</div><div class="track-sub">${r.path}</div></span></div></td>
+          <td class="col-format">${formatDuration(r.duration_sec)}</td>
           <td>${r.artist || ""}</td>
           <td>${r.album || ""}</td>
           <td>${r.genre || ""}</td>
           <td class="col-format">${r.extension ? "." + r.extension : "—"}</td>
-          <td class="col-format">${formatDuration(r.duration_sec)}</td>
           <td>${guessButtonHtml(r)}${editButtonHtml(r)}${deleteButtonHtml(r)}</td>
         </tr>`
         )
@@ -413,7 +455,35 @@
       metaEl.textContent = `Couldn't requeue — ${err.message}`;
     } finally {
       retryAllBtn.disabled = false;
-      retryAllBtn.textContent = "Retry all with improved matching";
+      retryAllBtn.textContent = "Retry all with audio matching";
+    }
+  });
+
+  retrySelectedBtn.addEventListener("click", async () => {
+    const id = Array.from(selectedIds)[0];
+    if (!id) return;
+    retrySelectedBtn.disabled = true;
+    retrySelectedBtn.textContent = "Identifying…";
+    try {
+      const res = await fetch(`/api/library/not-found-files/${id}/retry`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Retry failed");
+      metaEl.textContent = data.queued
+        ? "Queued for lookup; it is waiting for another enrichment request to finish."
+        : data.matched
+          ? "Audio identified and metadata updated."
+          : data.acoustid?.state === "missing"
+            ? "No AcoustID key is configured. Open Configuration to add one."
+            : ["invalid", "connection_error", "error", "fingerprint_unavailable"].includes(data.acoustid?.state)
+              ? `${data.acoustid.message || "AcoustID identification isn't available."} Open Configuration to review it.`
+          : "No match found this time. Check the filename and try another identification source.";
+      selectedIds.clear();
+      loadNotFound();
+    } catch (err) {
+      metaEl.textContent = `Couldn't retry identification: ${err.message}`;
+    } finally {
+      retrySelectedBtn.disabled = false;
+      retrySelectedBtn.textContent = "Identify selected now";
     }
   });
 

@@ -2,8 +2,9 @@
 # Builds "Playlist Exporter.app" into macapp/dist/, fully self-contained —
 # the server's own source and a clean production node_modules are bundled
 # into Contents/Resources/app, so the result works on any Mac it's copied
-# to, not just this checkout. Re-run any time main.swift, the icon, or the
-# server source changes. The result is a plain, ad-hoc-signed .app — drag it
+# to, not just this checkout. Re-run any time main.swift, the icon, release
+# notes, or server source changes. Each build records its UTC build time.
+# The result is a plain, ad-hoc-signed .app — drag it
 # to /Applications (or run it right from dist/) once built.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -31,12 +32,15 @@ echo "Bundling server..."
 APP_RES="$BUNDLE/Contents/Resources/app"
 mkdir -p "$APP_RES"
 cp "$REPO_ROOT/server.js" "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$APP_RES/"
+cp "$REPO_ROOT/release-notes.json" "$APP_RES/"
 cp -R "$REPO_ROOT/src" "$APP_RES/src"
 cp -R "$REPO_ROOT/public" "$APP_RES/public"
 (cd "$APP_RES" && npm ci --omit=dev --no-audit --no-fund)
+BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+printf '{\n  "version": "%s",\n  "buildTime": "%s"\n}\n' "$VERSION" "$BUILD_TIME" > "$APP_RES/build-info.json"
 
 echo "Compiling..."
-swiftc main.swift -o "$BUNDLE/Contents/MacOS/PlaylistExporter" -framework Cocoa -framework WebKit
+swiftc main.swift -o "$BUNDLE/Contents/MacOS/PlaylistExporter" -framework Cocoa -framework WebKit -framework UserNotifications
 
 cat > "$BUNDLE/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>

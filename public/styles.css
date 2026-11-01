@@ -207,6 +207,16 @@ body {
 .tab-btn:hover { color: var(--text-muted); }
 .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
 
+.notification-options { display: grid; gap: 10px; max-width: 520px; }
+.notification-option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.notification-option input { accent-color: var(--accent); }
+.notification-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.release-notes-content { display: grid; gap: 18px; max-width: 760px; }
+.release-entry { padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.release-entry h3 { margin: 0 0 4px; }
+.release-entry p { margin: 0; }
+.release-entry ul { margin: 12px 0 0; padding-left: 20px; color: var(--text-muted); line-height: 1.7; }
+
 /* display:contents keeps each view's children in the .app flex flow as if
    the wrapper weren't there, so .layout's own display:flex is unaffected. */
 .tab-view { display: none; }
@@ -597,6 +607,10 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
 .play-btn.playing { background: var(--accent); color: var(--accent-contrast); }
 .play-btn.playing:hover { background: var(--accent-strong); }
 
+.playlist-add-control { display: flex; align-items: center; gap: 5px; min-width: 220px; flex-wrap: wrap; }
+.playlist-add-select { min-width: 0; width: 150px; margin: 0; padding: 6px 8px; font-size: 11px; }
+.playlist-add-status { color: var(--text-muted); font-size: 11px; }
+
 .reveal-btn {
   border: none;
   background: var(--surface-2);
@@ -745,6 +759,16 @@ tr.restore-status-row td { background: color-mix(in srgb, var(--surface-2) 60%, 
 .metadata-edit-fields { display: flex; flex-direction: column; gap: 10px; }
 .metadata-edit-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
 .metadata-edit-fields input { width: 100%; }
+.metadata-playlist-label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+.metadata-playlist-label select { width: 100%; }
+.acoustid-status-panel { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.acoustid-status-panel[data-state="valid"] { border-color: var(--success); }
+.acoustid-status-panel[data-state="missing"],
+.acoustid-status-panel[data-state="invalid"],
+.acoustid-status-panel[data-state="connection_error"],
+.acoustid-status-panel[data-state="fingerprint_unavailable"],
+.acoustid-status-panel[data-state="error"] { border-color: var(--warning); }
+.acoustid-alert { align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--warning); background: var(--warning-wash); color: var(--text); font-size: 13px; }
 .progress-title { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
 .progress-track { height: 8px; border-radius: 100px; background: var(--surface-2); overflow: hidden; }
 .progress-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 100px; transition: width 0.25s ease; }

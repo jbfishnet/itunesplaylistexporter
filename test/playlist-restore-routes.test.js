@@ -62,6 +62,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   fakeMusicLibrary.__reset();
+  fakeMusicLibrary.__setPlaylists([{ id: PLAYLIST_ID, name: "Test Playlist", trackCount: 0 }]);
   fakeMusicLibrary.__setTracks(PLAYLIST_ID, [
     { position: 1, musicAppId: "100", title: "Already Ready", artist: "X", album: "", kind: "MP3", location: path.join(libraryRoot, "exact.mp3") },
     { position: 2, musicAppId: "101", title: "Exact Match Song", artist: "Artist X", album: "", kind: "", location: null },
@@ -136,6 +137,79 @@ test("POST /api/playlists/:id/restore/apply rejects a missing fileId", async () 
     body: JSON.stringify({}),
   });
   assert.equal(res.status, 400);
+});
+
+test("POST /api/playlists/:id/add-track imports the indexed file into the selected playlist", async () => {
+  const searchRes = await fetch(`${BASE_URL}/api/library/search?q=${encodeURIComponent("Exact Match Song")}`);
+  const { results } = await searchRes.json();
+  const res = await fetch(`${BASE_URL}/api/playlists/${PLAYLIST_ID}/add-track`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileId: results[0].id }),
+  });
+  const data = await res.json();
+
+  assert.equal(res.status, 200);
+  assert.equal(data.added, true);
+  assert.equal(data.verified, true);
+  assert.equal(data.playlist.trackCount, 6);
+  assert.equal(data.track.location, path.join(libraryRoot, "exact.mp3"));
+  assert.deepEqual(fakeMusicLibrary.__calls.addFileToPlaylist, [
+    { playlistId: PLAYLIST_ID, filePath: path.join(libraryRoot, "exact.mp3") },
+  ]);
+
+  const playlistTracksRes = await fetch(`${BASE_URL}/api/playlists/${PLAYLIST_ID}/tracks`);
+  const playlistTracks = await playlistTracksRes.json();
+  assert.equal(playlistTracks.filter((track) => track.location === path.join(libraryRoot, "exact.mp3")).length, 2);
+});
+
+test("POST /api/playlists/:id/add-track fails if Music.app doesn't show the added track", async () => {
+  const searchRes = await fetch(`${BASE_URL}/api/library/search?q=${encodeURIComponent("Exact Match Song")}`);
+  const { results } = await searchRes.json();
+  fakeMusicLibrary.__setAddVisible(false);
+
+  const res = await fetch(`${BASE_URL}/api/playlists/${PLAYLIST_ID}/add-track`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileId: results[0].id }),
+  });
+  const data = await res.json();
+
+  assert.equal(res.status, 502);
+  assert.match(data.error, /did not confirm/);
+});
+
+test("POST /api/media/pause-music pauses Music.app when requested", async () => {
+  const res = await fetch(`${BASE_URL}/api/media/pause-music`, { method: "POST" });
+  const data = await res.json();
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(data, { paused: true });
+  assert.equal(fakeMusicLibrary.__calls.pausePlaybackIfPlaying.length, 1);
+});
+
+test("GET and PUT /api/notifications/settings expose selectable application events", async () => {
+  const getRes = await fetch(`${BASE_URL}/api/notifications/settings`);
+  const settings = await getRes.json();
+  assert.equal(getRes.status, 200);
+  assert.ok(settings.eventTypes.export_success);
+  assert.equal(settings.selected.export_success, true);
+
+  const putRes = await fetch(`${BASE_URL}/api/notifications/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ selected: { export_success: false } }),
+  });
+  const updated = await putRes.json();
+  assert.equal(putRes.status, 200);
+  assert.equal(updated.selected.export_success, false);
+
+  const invalidRes = await fetch(`${BASE_URL}/api/notifications/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ selected: { unknown: true } }),
+  });
+  assert.equal(invalidRes.status, 400);
 });
 
 test("POST /api/playlists/:id/restore/apply 404s for an unknown fileId", async () => {

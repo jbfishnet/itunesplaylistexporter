@@ -12,7 +12,7 @@ const HOUR_MS = 60 * 60 * 1000;
  * removing a folder from the Library Folders UI takes effect on the very
  * next scan (hourly or manually triggered) without needing a server restart.
  */
-function createScheduler({ db, intervalMs = HOUR_MS }) {
+function createScheduler({ db, intervalMs = HOUR_MS, onComplete = () => {} }) {
   const state = {
     running: false,
     phase: null,
@@ -62,6 +62,7 @@ function createScheduler({ db, intervalMs = HOUR_MS }) {
       state.lastScanAt = new Date().toISOString();
       state.nextScanAt = new Date(Date.now() + intervalMs).toISOString();
     }
+    onComplete(state.lastResult);
     return { started: true };
   }
 

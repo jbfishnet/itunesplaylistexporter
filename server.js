@@ -53,7 +53,9 @@ const llmMetadataExtractor = process.env.PLE_TEST_LLM_EXTRACTOR
 const { openLibraryDb } = require("./src/libraryDb");
 const { createScheduler } = require("./src/libraryScheduler");
 const { createEnrichmentQueue } = require("./src/enrichmentQueue");
+const { getAcoustidStatus, checkAcoustidKey } = require("./src/acoustId");
 const { createDuplicateFinder } = require("./src/duplicateFinder");
+const appNotifications = require("./src/appNotifications");
 
 const LIBRARY_ROOT = process.env.PLE_LIBRARY_ROOT || "/Volumes/jb/iTunes4TB/iTunes Media/Music";
 const LIBRARY_DB_PATH = process.env.PLE_LIBRARY_DB || path.join(__dirname, "data", "library.sqlite3");
@@ -108,7 +110,51 @@ function isAutomationPermissionError(message) {
 }
 
 app.get("/api/app-info", (req, res) => {
-  res.json({ version: APP_VERSION });
+  let buildInfo = {};
+  try {
+    buildInfo = JSON.parse(fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8"));
+  } catch (err) {
+    if (err.code !== "ENOENT") return res.status(500).json({ error: err.message });
+  }
+  res.json({ version: APP_VERSION, buildTime: buildInfo.buildTime || null });
+});
+
+app.get("/api/release-notes", (req, res) => {
+  try {
+    const notes = JSON.parse(fs.readFileSync(path.join(__dirname, "release-notes.json"), "utf8"));
+    res.json(notes);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/notifications/settings", (req, res) => {
+  try {
+    res.json({ eventTypes: appNotifications.EVENT_TYPES, selected: appNotifications.getSettings() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/notifications/settings", (req, res) => {
+  try {
+    const selected = appNotifications.saveSettings(req.body?.selected);
+    res.json({ selected });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/notifications/stream", (req, res) => {
+  appNotifications.subscribe(req, res);
+});
+
+app.get("/api/acoustid/status", async (req, res) => {
+  res.json(await getAcoustidStatus());
+});
+
+app.post("/api/acoustid/check", async (req, res) => {
+  res.json(await checkAcoustidKey());
 });
 
 app.get("/api/playlists", async (req, res) => {
@@ -123,6 +169,69 @@ app.get("/api/playlists", async (req, res) => {
           "permission in System Settings > Privacy & Security > Automation."
         : undefined,
     });
+  }
+});
+
+app.post("/api/media/pause-music", async (req, res) => {
+  try {
+    const paused = await musicLibrary.pausePlaybackIfPlaying();
+    res.json({ paused });
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+      hint: isAutomationPermissionError(err.message)
+        ? "Allow Playlist Exporter to control Music in System Settings > Privacy & Security > Automation."
+        : undefined,
+    });
+  }
+});
+
+app.post("/api/playlists/:id/add-track", async (req, res) => {
+  if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
+  const playlistId = req.params.id;
+  if (!/^\d+$/.test(playlistId) || !Number.isSafeInteger(Number(playlistId))) {
+    return res.status(400).json({ error: "Invalid playlist id" });
+  }
+  const fileId = parseInt(req.body?.fileId, 10);
+  if (!Number.isSafeInteger(fileId) || fileId < 1) {
+    return res.status(400).json({ error: "fileId is required" });
+  }
+
+  const file = libraryDb.getById(fileId);
+  if (!file) return res.status(404).json({ error: "File not found in the index" });
+  if (file.protected) return res.status(403).json({ error: "DRM-protected files can't be added to a playlist" });
+
+  try {
+    const stat = await fs.promises.stat(file.path);
+    if (!stat.isFile()) return res.status(404).json({ error: "File is no longer available on disk" });
+    const matchesFile = (track) => track.location && path.resolve(track.location) === path.resolve(file.path);
+    const tracksBeforeAdd = await musicLibrary.getPlaylistTracks(playlistId);
+    const matchesBeforeAdd = tracksBeforeAdd.filter(matchesFile).length;
+    await musicLibrary.addFileToPlaylist(playlistId, file.path);
+    let verifiedTracks;
+    let confirmed = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      verifiedTracks = await musicLibrary.getPlaylistTracks(playlistId);
+      confirmed = verifiedTracks.filter(matchesFile).length > matchesBeforeAdd;
+      if (confirmed) {
+        break;
+      }
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    const addedTrack = verifiedTracks.findLast(matchesFile);
+    if (!confirmed || !addedTrack) {
+      return res.status(502).json({ error: "Music.app did not confirm that the track was added. Refresh the playlist and check before retrying." });
+    }
+    const playlists = await musicLibrary.listPlaylists();
+    const playlist = playlists.find((candidate) => String(candidate.id) === playlistId);
+    if (!playlist) {
+      return res.status(502).json({ error: "The track is present, but Music.app did not return the updated playlist. Refresh the playlist list." });
+    }
+    appNotifications.publish("playlist_add", "Track added to playlist", `${file.title || path.basename(file.path)} was added.`);
+    res.json({ added: true, verified: true, playlist, track: addedTrack });
+  } catch (err) {
+    if (err.code === "ENOENT") return res.status(404).json({ error: "File is no longer available on disk" });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -242,13 +351,19 @@ app.post("/api/playlists/:id/restore", async (req, res) => {
       }
     }
 
-    res.json({
+    const response = {
       fixed: fixedResults,
       needsReview: needsReviewResults,
       downloading,
       unsupported,
       libraryIndexAvailable: Boolean(libraryDb),
-    });
+    };
+    appNotifications.publish(
+      "playlist_restore",
+      "Playlist restore finished",
+      `${fixedResults.length} fixed, ${needsReviewResults.length} need review, ${unsupported.length} unsupported.`
+    );
+    res.json(response);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -270,6 +385,11 @@ app.post("/api/playlists/:id/restore/apply", async (req, res) => {
   try {
     await musicLibrary.addFileToPlaylist(playlistId, file.path);
     if (trackMusicAppId) await musicLibrary.removeTrackFromPlaylist(playlistId, trackMusicAppId);
+    appNotifications.publish(
+      "playlist_restore",
+      "Playlist restore finished",
+      `${file.title || path.basename(file.path)} was restored.`
+    );
     res.json({ applied: true, path: file.path });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -305,6 +425,11 @@ app.post("/api/playlists/:id/rebuild", async (req, res) => {
       plan,
     });
 
+    appNotifications.publish(
+      "playlist_restore",
+      "Playlist rebuild finished",
+      `${newPlaylistName}: ${results.filter((result) => result.ok).length} tracks processed, ${results.filter((result) => !result.ok).length} failed.`
+    );
     res.json({
       newPlaylistId,
       newPlaylistName,
@@ -374,6 +499,15 @@ app.post("/api/export", async (req, res) => {
     });
 
     const jobId = exporter.startExportJob({ playlists, destinationRoot: destination });
+    const job = exporter.getJob(jobId);
+    job.emitter.on("event", (event) => {
+      if (event.type !== "done") return;
+      appNotifications.publish(
+        event.failed === 0 ? "export_success" : "export_failure",
+        event.failed === 0 ? "Export completed" : "Export completed with failures",
+        `${event.copied} of ${event.total} files copied; ${event.failed} failed.`
+      );
+    });
     res.json({ jobId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -449,7 +583,20 @@ if (!process.env.PLE_NO_LIBRARY_SCAN) {
     libraryDb.setLibraryRoots([LIBRARY_ROOT]);
   }
 
-  libraryScheduler = createScheduler({ db: libraryDb });
+  libraryScheduler = createScheduler({
+    db: libraryDb,
+    onComplete: (result) => {
+      const succeeded = result?.result === "ok";
+      const errorCount = result?.errors?.length || 0;
+      appNotifications.publish(
+        succeeded ? "scan_success" : "scan_failure",
+        succeeded ? "Library scan completed" : "Library scan needs attention",
+        succeeded
+          ? `${result.filesProcessed ?? result.filesTotal ?? 0} files processed.`
+          : `${result?.result === "root_missing" ? "A library folder is unavailable." : `${errorCount} scan errors.`}`
+      );
+    },
+  });
   enrichmentQueue = createEnrichmentQueue({ db: libraryDb });
   duplicateFinder = createDuplicateFinder({ db: libraryDb });
   libraryScheduler.start();
@@ -629,8 +776,40 @@ app.post("/api/library/retry-tag-writes", async (req, res) => {
 
 app.post("/api/library/requeue-not-found", (req, res) => {
   if (!libraryDb) return res.status(503).json({ error: "Library index is disabled" });
-  const requeued = libraryDb.requeueNotFound();
+  const rawIds = req.body?.ids;
+  if (rawIds !== undefined && (!Array.isArray(rawIds) || rawIds.length === 0)) {
+    return res.status(400).json({ error: "ids must be a non-empty array when provided" });
+  }
+  const ids = rawIds?.map((value) => parseInt(value, 10)).filter(Number.isFinite);
+  const requeued = libraryDb.requeueNotFound(ids || null);
   res.json({ requeued });
+});
+
+app.post("/api/library/not-found-files/:id/retry", async (req, res) => {
+  if (!libraryDb || !enrichmentQueue) return res.status(503).json({ error: "Library index is disabled" });
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid file id" });
+  const row = libraryDb.getById(id);
+  if (!row) return res.status(404).json({ error: "File not found in the index" });
+  if (row.enrichment_status !== "not_found") {
+    return res.status(409).json({ error: "File is no longer in the Not Found list" });
+  }
+
+  const requeued = libraryDb.requeueNotFound([id]);
+  if (!requeued) return res.status(409).json({ error: "File could not be requeued" });
+  try {
+    const result = await enrichmentQueue.processOne(id);
+    const updated = libraryDb.getById(id);
+    res.json({
+      queued: !result.processed,
+      processed: result.processed,
+      matched: result.matched || false,
+      status: updated?.enrichment_status || null,
+      acoustid: await getAcoustidStatus(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // A basic categorical palette for telling library folders apart at a
@@ -912,6 +1091,21 @@ app.post("/api/library/not-found-files/manual-metadata", async (req, res) => {
   }
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: "At least one field must be filled in" });
 
+  const playlistId = req.body?.playlistId === undefined || req.body?.playlistId === null || req.body.playlistId === ""
+    ? null
+    : String(req.body.playlistId);
+  let destinationPlaylist = null;
+  if (playlistId !== null) {
+    if (!/^\d+$/.test(playlistId)) return res.status(400).json({ error: "Invalid Music.app playlist id" });
+    try {
+      const playlists = await musicLibrary.listPlaylists();
+      destinationPlaylist = playlists.find((candidate) => String(candidate.id) === playlistId) || null;
+      if (!destinationPlaylist) return res.status(404).json({ error: "Music.app playlist not found" });
+    } catch (err) {
+      return res.status(500).json({ error: `Couldn't load Music.app playlists: ${err.message}` });
+    }
+  }
+
   const results = [];
   for (const id of ids) {
     const row = libraryDb.getById(id);
@@ -937,9 +1131,48 @@ app.post("/api/library/not-found-files/manual-metadata", async (req, res) => {
       libraryDb.setTagWriteStatus(id, "failed");
       results.push({ id, ok: true, written: false, writeError: err.message });
     }
+
+    const result = results[results.length - 1];
+    try {
+      const stat = await fs.promises.stat(row.path);
+      if (!stat.isFile()) throw new Error("File is no longer available on disk");
+      if (row.protected) throw new Error("DRM-protected files can't be added to Music.app");
+
+      if (!destinationPlaylist) {
+        result.music = await musicLibrary.addFileToLibrary(row.path);
+      } else {
+        const matchesFile = (track) => track.location && path.resolve(track.location) === path.resolve(row.path);
+        const tracksBeforeAdd = await musicLibrary.getPlaylistTracks(playlistId);
+        if (tracksBeforeAdd.some(matchesFile)) {
+          result.music = { added: false, alreadyPresent: true, verified: true, playlistId };
+        } else {
+          await musicLibrary.addFileToPlaylist(playlistId, row.path);
+          let verifiedTracks = [];
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            verifiedTracks = await musicLibrary.getPlaylistTracks(playlistId);
+            if (verifiedTracks.some(matchesFile)) break;
+            if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+          if (!verifiedTracks.some(matchesFile)) {
+            throw new Error("Music.app did not confirm that the track was added to the selected playlist");
+          }
+          result.music = { added: true, alreadyPresent: false, verified: true, playlistId };
+        }
+      }
+    } catch (err) {
+      result.musicError = err.message;
+    }
   }
 
-  res.json({ results, appliedFields: Object.keys(fields), requeued: results.filter((r) => r.ok).length });
+  res.json({
+    results,
+    appliedFields: Object.keys(fields),
+    requeued: results.filter((r) => r.ok).length,
+    musicAdded: results.filter((r) => r.music?.added).length,
+    musicAlreadyPresent: results.filter((r) => r.music?.alreadyPresent).length,
+    musicFailed: results.filter((r) => r.musicError).length,
+    playlist: destinationPlaylist ? { id: destinationPlaylist.id, name: destinationPlaylist.name } : null,
+  });
 });
 
 // Single-file AI guess (Not Found tab's "✨" button) — asks Claude to read

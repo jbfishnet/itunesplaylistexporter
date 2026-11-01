@@ -28,6 +28,7 @@
 
   let currentUrl = null;
   let currentLabel = "";
+  let playRequestId = 0;
 
   function sync() {
     const isPlaying = currentUrl && !audio.paused;
@@ -40,6 +41,7 @@
   }
 
   function stop() {
+    playRequestId += 1;
     audio.pause();
     audio.removeAttribute("src");
     currentUrl = null;
@@ -47,18 +49,34 @@
     sync();
   }
 
-  function play(url, label) {
+  async function play(url, label) {
+    const requestId = ++playRequestId;
     currentUrl = url;
     currentLabel = label || "";
-    labelEl.textContent = `Playing "${currentLabel}"…`;
+    labelEl.textContent = `Starting "${currentLabel}"…`;
     bar.classList.add("open");
     bar.classList.remove("player-error");
-    audio.src = url;
-    audio.play().catch((err) => {
+    sync();
+    try {
+      await window.PlaylistExporterPlayback.playAfterPausing(
+        async () => {
+        const response = await fetch("/api/media/pause-music", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.hint ? `${data.error} ${data.hint}` : data.error);
+        },
+        async () => {
+          if (requestId !== playRequestId) return;
+          audio.src = url;
+          await audio.play();
+          if (requestId === playRequestId) labelEl.textContent = `Playing "${currentLabel}"…`;
+        }
+      );
+    } catch (err) {
+      if (requestId !== playRequestId) return;
       labelEl.textContent = `Couldn't play "${currentLabel}" — ${err.message}`;
       bar.classList.add("player-error");
-    });
-    sync();
+      sync();
+    }
   }
 
   /** What every row's play button calls: a second click on the track that's
@@ -73,7 +91,7 @@
 
   toggleBtn.addEventListener("click", () => {
     if (!currentUrl) return;
-    if (audio.paused) audio.play().catch(() => {});
+    if (audio.paused) play(currentUrl, currentLabel);
     else audio.pause();
   });
   closeBtn.addEventListener("click", stop);

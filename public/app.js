@@ -242,6 +242,34 @@
         lastError = err;
         if (attempt < CLIENT_RETRY_ATTEMPTS) await sleep(CLIENT_RETRY_DELAYS_MS[attempt - 1]);
       }
+
+      async function refreshAddedPlaylist(id) {
+        while (fetching.has(id) || backgroundRefreshing.has(id)) await sleep(50);
+        fetching.add(id);
+        renderSidebar();
+        try {
+          const [tracks, playlistResponse] = await Promise.all([
+            fetchTracksOnce(id),
+            fetch("/api/playlists"),
+          ]);
+          const updatedPlaylists = await playlistResponse.json();
+          if (!playlistResponse.ok) throw new Error(updatedPlaylists.error || "Couldn't refresh Music.app playlists");
+          playlists = updatedPlaylists;
+          playlistsSyncedAt = Date.now();
+          trackCache.set(id, tracks);
+          trackSyncedAt.set(id, Date.now());
+          errorCache.delete(id);
+          autoHealAttempts.delete(id);
+          saveCache();
+          renderSidebar();
+          renderMain();
+        } catch (err) {
+          showToast(`Track was added, but the playlist view couldn't refresh: ${err.message}`, { error: true });
+        } finally {
+          fetching.delete(id);
+          renderSidebar();
+        }
+      }
     }
 
     if (lastError) {
@@ -1024,6 +1052,11 @@
     scheduleAutoHeal();
     scheduleBackgroundSync();
   }
+
+  document.addEventListener("ple:playlist-updated", (event) => {
+    const playlistId = String(event.detail?.playlist?.id || "");
+    if (playlistId) refreshAddedPlaylist(playlistId);
+  });
 
   init();
 })();

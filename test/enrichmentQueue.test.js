@@ -7,7 +7,7 @@ const { parseFile } = require("music-metadata");
 
 const { openLibraryDb } = require("../src/libraryDb");
 const {
-  createEnrichmentQueue,
+  createEnrichmentQueue: createEnrichmentQueueImpl,
   buildSearchTerm,
   filenameToSearchTerm,
   parseFilenameHints,
@@ -16,6 +16,10 @@ const {
 } = require("../src/enrichmentQueue");
 
 const FIXTURES = path.join(__dirname, "fixtures");
+
+function createEnrichmentQueue(options) {
+  return createEnrichmentQueueImpl({ identifyByFingerprintFn: async () => null, ...options });
+}
 
 function freshDb(t) {
   const db = openLibraryDb(":memory:");
@@ -108,6 +112,53 @@ test("a matching result enriches the row and fills in the missing fields", async
   assert.equal(row.year, 2002);
   assert.equal(row.enrichment_status, "enriched");
   assert.equal(db.getEnrichmentBacklog(10).length, 0);
+});
+
+test("a filename search miss falls back to audio fingerprint identification", async (t) => {
+  const db = freshDb(t);
+  const id = db.upsertFile({
+    path: "/Unknown Artist/Unknown Album/HREMusicalpreMix 02.mp3",
+    size: 1,
+    mtimeMs: 1,
+    extension: "mp3",
+    enrichmentStatus: "pending",
+    scanId: 1,
+  });
+  let fingerprintedPath = null;
+  const queue = createEnrichmentQueue({
+    db,
+    fetchFn: async () => fakeItunesResponse([]),
+    identifyByFingerprintFn: async (filePath) => {
+      fingerprintedPath = filePath;
+      return { title: "Known Track", artist: "Known Artist", album: "Known Album", genre: null, year: null };
+    },
+  });
+
+  const result = await queue.processOne();
+  assert.equal(result.matched, true);
+  assert.equal(fingerprintedPath, "/Unknown Artist/Unknown Album/HREMusicalpreMix 02.mp3");
+  assert.equal(db.getById(id).title, "Known Track");
+  assert.equal(db.getById(id).enrichment_status, "enriched");
+});
+
+test("processOne can prioritize an explicitly requested pending row", async (t) => {
+  const db = freshDb(t);
+  db.upsertFile({ path: "/older.mp3", size: 1, mtimeMs: 1, extension: "mp3", title: "Older", enrichmentStatus: "pending", scanId: 1 });
+  const targetId = db.upsertFile({ path: "/target.mp3", size: 1, mtimeMs: 1, extension: "mp3", title: "Target", enrichmentStatus: "pending", scanId: 1 });
+  let requestedTerm = "";
+  const queue = createEnrichmentQueue({
+    db,
+    fetchFn: async (url) => {
+      requestedTerm = new URL(url).searchParams.get("term");
+      return fakeItunesResponse([]);
+    },
+    identifyByFingerprintFn: async () => null,
+  });
+
+  await queue.processOne(targetId);
+  assert.equal(requestedTerm, "target");
+  assert.equal(db.getById(targetId).enrichment_status, "not_found");
+  assert.equal(db.getEnrichmentBacklog(10).length, 1, "the older pending row remains untouched");
 });
 
 test("no matching artist in the results marks the row not_found (terminal)", async (t) => {

@@ -22,9 +22,11 @@ process.env.PLE_NO_OPEN = "1";
 process.env.PLE_LIBRARY_ROOT = libraryRoot;
 process.env.PLE_LIBRARY_DB = dbPath;
 process.env.PLE_TEST_FILE_TRASH = path.join(__dirname, "fixtures", "fakeFileTrash.js");
+process.env.PLE_TEST_MUSIC_LIBRARY = path.join(__dirname, "fixtures", "fakeMusicLibrary.js");
 const server = require("../server");
 const { openLibraryDb } = require("../src/libraryDb");
 const fakeFileTrash = require("./fixtures/fakeFileTrash");
+const fakeMusicLibrary = require("./fixtures/fakeMusicLibrary");
 
 const BASE_URL = `http://localhost:${process.env.PORT}`;
 
@@ -84,7 +86,10 @@ test.after(() => {
   fs.rmSync(dbPath, { force: true });
 });
 
-test.beforeEach(() => fakeFileTrash.__reset());
+test.beforeEach(() => {
+  fakeFileTrash.__reset();
+  fakeMusicLibrary.__reset();
+});
 
 test("DELETE /api/library/not-found-files/:id moves the file to the Trash and removes it from the index", async () => {
   const { id, filePath } = seedNotFoundFile("gone1.mp3");
@@ -160,6 +165,9 @@ test("POST manual-metadata: fills in the blank tags on disk and requeues the row
   assert.deepEqual(data.appliedFields, ["title", "artist"]);
   assert.equal(data.results[0].ok, true);
   assert.equal(data.results[0].written, true);
+  assert.equal(data.results[0].music.verified, true);
+  assert.equal(data.musicAdded, 1);
+  assert.deepEqual(fakeMusicLibrary.__calls.addFileToLibrary, [{ filePath }]);
 
   const browseRes = await fetch(`${BASE_URL}/api/library/browse?title=${encodeURIComponent("Corrected Title")}`);
   const browseData = await browseRes.json();
@@ -216,6 +224,8 @@ test("POST manual-metadata: multiselect applies the same field values to every s
   });
   const data = await res.json();
   assert.equal(data.requeued, 3);
+  assert.equal(data.musicAdded, 3);
+  assert.equal(fakeMusicLibrary.__calls.addFileToLibrary.length, 3);
 
   for (const { id } of [a, b, c]) {
     const browseRes = await fetch(`${BASE_URL}/api/library/browse?album=${encodeURIComponent("Shared Album")}`);
@@ -224,6 +234,43 @@ test("POST manual-metadata: multiselect applies the same field values to every s
     assert.ok(row, `track ${id} must have the shared album applied`);
     assert.equal(row.genre, "Rock");
   }
+});
+
+test("POST manual-metadata: adds each edited file to a selected Music.app playlist and verifies it", async () => {
+  const a = seedNotFoundFileFromFixture("playlist-multi-a.mp3");
+  const b = seedNotFoundFileFromFixture("playlist-multi-b.mp3");
+  fakeMusicLibrary.__setPlaylists([{ id: "1234", name: "Edited Tracks", trackCount: 0 }]);
+
+  const res = await fetch(`${BASE_URL}/api/library/not-found-files/manual-metadata`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [a.id, b.id], metadata: { artist: "Playlist Artist" }, playlistId: "1234" }),
+  });
+  const data = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(data.musicAdded, 2);
+  assert.equal(data.musicFailed, 0);
+  assert.deepEqual(data.playlist, { id: "1234", name: "Edited Tracks" });
+  assert.deepEqual(fakeMusicLibrary.__calls.addFileToPlaylist, [
+    { playlistId: "1234", filePath: a.filePath },
+    { playlistId: "1234", filePath: b.filePath },
+  ]);
+});
+
+test("POST manual-metadata: reports Music.app import failures without hiding successful metadata saves", async () => {
+  const { id } = seedNotFoundFileFromFixture("music-import-failed.mp3");
+  fakeMusicLibrary.__setAddVisible(false);
+
+  const res = await fetch(`${BASE_URL}/api/library/not-found-files/manual-metadata`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [id], metadata: { artist: "Saved Artist" } }),
+  });
+  const data = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(data.results[0].ok, true);
+  assert.match(data.results[0].musicError, /did not confirm/);
+  assert.equal(data.musicFailed, 1);
 });
 
 test("POST manual-metadata: rejects an empty ids array and an all-blank metadata object", async () => {

@@ -118,6 +118,18 @@ test("requeueNotFound puts every not_found row back into the pending backlog, le
   assert.equal(db.getStats().enrichmentCounts.skipped_had_tags, 1, "a well-tagged row must not be touched");
 });
 
+test("requeueNotFound can target only the requested Not Found rows", (t) => {
+  const db = freshDb(t);
+  const firstId = db.upsertFile({ path: "/first.mp3", size: 1, mtimeMs: 1, extension: "mp3", enrichmentStatus: "pending", scanId: 1 });
+  const secondId = db.upsertFile({ path: "/second.mp3", size: 1, mtimeMs: 1, extension: "mp3", enrichmentStatus: "pending", scanId: 1 });
+  db.markNotFound(firstId);
+  db.markNotFound(secondId);
+
+  assert.equal(db.requeueNotFound([secondId, secondId, 99999]), 1);
+  assert.equal(db.getById(firstId).enrichment_status, "not_found");
+  assert.equal(db.getById(secondId).enrichment_status, "pending");
+});
+
 test("enrichmentBacklog rows carry everything the enrichment queue and tag writer need (extension, year, protected)", (t) => {
   const db = freshDb(t);
   db.upsertFile({

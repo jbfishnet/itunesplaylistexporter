@@ -53,7 +53,7 @@ npm start</code></pre>
         <li>Install Node 24 and ffmpeg (the M4A tag-writer's test shells out to it directly)</li>
         <li>Install dependencies (<code>npm ci</code>) and run the full test suite</li>
         <li>Read the version from <code>package.json</code></li>
-        <li>Build the native macOS app (<code>macapp/build.sh</code>)</li>
+        <li>Build the native macOS app (<code>macapp/build.sh</code>), recording the UTC build timestamp and bundling <code>release-notes.json</code></li>
         <li>Upload it as a build artifact, named <code>Playlist Exporter-vX.Y.Z</code></li>
       </ol>
       <p>
@@ -66,7 +66,9 @@ npm start</code></pre>
         <code>package.json</code>'s <code>version</code> is the single source of truth
         (plain <a href="https://semver.org/">semver</a>). Bump it in the same
         commit/PR as the change it belongs to — everything else (web UI, native app's
-        <code>Info.plist</code>, CI artifact name) picks it up automatically. There's
+        <code>Info.plist</code>, CI artifact name) picks it up automatically. Add a
+        user-facing summary to <code>release-notes.json</code> for each shipped version;
+        every app build records its own UTC build timestamp. There's
         no enforced bump-on-every-PR check; for a single-developer local tool that's
         more process than it's worth.
       </p>
