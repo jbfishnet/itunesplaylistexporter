@@ -1,12 +1,20 @@
 {
   "releases": [
     {
+      "version": "1.2.4",
+      "date": "2026-11-01",
+      "changes": [
+        "Removed all Keychain access from the app to prevent authorization prompts from blocking or hanging startup.",
+        "Save the AcoustID key in the user's Application Support folder with account-only permissions; re-enter a previously saved Keychain key once."
+      ]
+    },
+    {
       "version": "1.2.3",
       "date": "2026-11-01",
       "changes": [
         "Removed the macOS Keychain command-line read that could block behind a system authorization prompt.",
         "Store the AcoustID key in the user's Application Support folder with account-only permissions so it remains available across app updates.",
-        "Silently migrate an accessible legacy Keychain key without showing an authorization dialog.",
+        "Removed legacy Keychain migration after it was found to stall startup on affected Macs; users need to re-enter an existing key once.",
         "Added regression coverage for native-app startup, key-file errors, environment overrides, and app replacement."
       ]
     },

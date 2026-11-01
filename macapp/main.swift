@@ -14,8 +14,6 @@
 import Cocoa
 import WebKit
 import UserNotifications
-import Security
-import LocalAuthentication
 
 let port = 4173
 let serverURL = URL(string: "http://localhost:\(port)/")!
@@ -161,7 +159,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             )
             return
         }
-        migrateLegacyAcoustidKeyIfAvailable()
         guard let nodePath = findNode() else {
             showFatalAlert(
                 title: "Node.js not found",
@@ -319,32 +316,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             NSLog("Playlist Exporter couldn't save the local AcoustID key file: %@", error.localizedDescription)
             return false
         }
-    }
-
-    func migrateLegacyAcoustidKeyIfAvailable() {
-        guard !FileManager.default.fileExists(atPath: acoustidKeyFile.path) else { return }
-        let authenticationContext = LAContext()
-        authenticationContext.interactionNotAllowed = true
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.janboike.playlistexporter.acoustid",
-            kSecAttrAccount as String: "api-key",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: authenticationContext,
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let key = String(data: data, encoding: .utf8),
-              !key.isEmpty else {
-            if status != errSecItemNotFound && status != errSecInteractionNotAllowed && status != errSecAuthFailed {
-                NSLog("Playlist Exporter couldn't silently migrate the legacy AcoustID key (status %d)", status)
-            }
-            return
-        }
-        _ = saveAcoustidKey(key)
     }
 
     func requestNotificationPermission() {
