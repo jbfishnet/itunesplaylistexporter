@@ -301,6 +301,22 @@ function candidateSummary(file) {
   return { id: file.id, path: file.path, title: file.title, artist: file.artist, album: file.album };
 }
 
+async function addReplacementToPlaylist(playlistId, filePath, trackMusicAppId) {
+  await musicLibrary.addFileToPlaylist(playlistId, filePath);
+  if (!trackMusicAppId) return { originalRemoved: null };
+
+  try {
+    await musicLibrary.removeTrackFromPlaylist(playlistId, trackMusicAppId);
+    return { originalRemoved: true };
+  } catch (err) {
+    return {
+      originalRemoved: false,
+      warning: "The replacement was added, but Music.app couldn't remove the original entry. Both entries may remain.",
+      removalError: err.message,
+    };
+  }
+}
+
 // This route and the ones below (restore/apply, rebuild, playlist delete)
 // are the only code in this app that writes to the user's real Music.app
 // library — everything else only ever reads from it.
@@ -326,9 +342,8 @@ app.post("/api/playlists/:id/restore", async (req, res) => {
 
     for (const { track, file } of fixed) {
       try {
-        await musicLibrary.addFileToPlaylist(playlistId, file.path);
-        if (track.musicAppId) await musicLibrary.removeTrackFromPlaylist(playlistId, track.musicAppId);
-        fixedResults.push(trackSummary(track, { matchedPath: file.path }));
+        const replacement = await addReplacementToPlaylist(playlistId, file.path, track.musicAppId);
+        fixedResults.push(trackSummary(track, { matchedPath: file.path, ...replacement }));
       } catch (err) {
         // The write failed (Music.app busy, file went away, etc.) — fall back
         // to surfacing it as reviewable rather than silently dropping it.
@@ -361,7 +376,7 @@ app.post("/api/playlists/:id/restore", async (req, res) => {
     appNotifications.publish(
       "playlist_restore",
       "Playlist restore finished",
-      `${fixedResults.length} fixed, ${needsReviewResults.length} need review, ${unsupported.length} unsupported.`
+      `${fixedResults.length} replacements added, ${fixedResults.filter((item) => item.warning).length} original entries remain, ${needsReviewResults.length} need review, ${unsupported.length} unsupported.`
     );
     res.json(response);
   } catch (err) {
@@ -383,14 +398,15 @@ app.post("/api/playlists/:id/restore/apply", async (req, res) => {
   if (!file) return res.status(404).json({ error: "File not found in the index" });
 
   try {
-    await musicLibrary.addFileToPlaylist(playlistId, file.path);
-    if (trackMusicAppId) await musicLibrary.removeTrackFromPlaylist(playlistId, trackMusicAppId);
+    const replacement = await addReplacementToPlaylist(playlistId, file.path, trackMusicAppId);
     appNotifications.publish(
       "playlist_restore",
       "Playlist restore finished",
-      `${file.title || path.basename(file.path)} was restored.`
+      replacement.warning
+        ? `${file.title || path.basename(file.path)} was added; the original playlist entry may remain.`
+        : `${file.title || path.basename(file.path)} was restored.`
     );
-    res.json({ applied: true, path: file.path });
+    res.json({ applied: true, path: file.path, ...replacement });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

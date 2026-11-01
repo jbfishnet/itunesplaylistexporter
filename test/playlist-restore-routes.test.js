@@ -108,6 +108,22 @@ test("POST /api/playlists/:id/restore buckets tracks and only writes for the tra
   );
 });
 
+test("POST /api/playlists/:id/restore reports a replacement when Music.app cannot remove the original", async () => {
+  fakeMusicLibrary.__setRemoveShouldFail("101");
+
+  const res = await fetch(`${BASE_URL}/api/playlists/${PLAYLIST_ID}/restore`, { method: "POST" });
+  const data = await res.json();
+
+  assert.equal(res.status, 200);
+  assert.equal(data.fixed.length, 1);
+  assert.equal(data.fixed[0].originalRemoved, false);
+  assert.match(data.fixed[0].warning, /Both entries may remain/);
+  assert.match(data.fixed[0].removalError, /-1708/);
+  const tracks = await fakeMusicLibrary.getPlaylistTracks(PLAYLIST_ID);
+  assert.equal(tracks.filter((track) => track.location === path.join(libraryRoot, "exact.mp3")).length, 2);
+  assert.ok(tracks.some((track) => track.musicAppId === "101"));
+});
+
 test("POST /api/playlists/:id/restore/apply applies a chosen candidate and removes the old entry", async () => {
   const restoreRes = await fetch(`${BASE_URL}/api/playlists/${PLAYLIST_ID}/restore`, { method: "POST" });
   const restoreData = await restoreRes.json();
@@ -128,6 +144,28 @@ test("POST /api/playlists/:id/restore/apply applies a chosen candidate and remov
   assert.equal(fakeMusicLibrary.__calls.addFileToPlaylist.length, 1);
   assert.equal(fakeMusicLibrary.__calls.removeTrackFromPlaylist.length, 1);
   assert.equal(fakeMusicLibrary.__calls.removeTrackFromPlaylist[0].musicAppTrackId, "102");
+});
+
+test("POST /api/playlists/:id/restore/apply returns partial success if Music.app cannot remove the original", async () => {
+  const restoreRes = await fetch(`${BASE_URL}/api/playlists/${PLAYLIST_ID}/restore`, { method: "POST" });
+  const review = (await restoreRes.json()).needsReview[0];
+  fakeMusicLibrary.__setRemoveShouldFail("102");
+
+  const res = await fetch(`${BASE_URL}/api/playlists/${PLAYLIST_ID}/restore/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileId: review.candidates[0].id, trackMusicAppId: review.musicAppId }),
+  });
+  const data = await res.json();
+
+  assert.equal(res.status, 200);
+  assert.equal(data.applied, true);
+  assert.equal(data.originalRemoved, false);
+  assert.match(data.warning, /Both entries may remain/);
+  assert.match(data.removalError, /-1708/);
+  const tracks = await fakeMusicLibrary.getPlaylistTracks(PLAYLIST_ID);
+  assert.equal(tracks.filter((track) => track.location === path.join(libraryRoot, "ambiguous.mp3")).length, 1);
+  assert.ok(tracks.some((track) => track.musicAppId === "102"));
 });
 
 test("POST /api/playlists/:id/restore/apply rejects a missing fileId", async () => {

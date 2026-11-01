@@ -15,6 +15,7 @@ const path = require("path");
 let state = {
   tracksByPlaylist: {},
   downloadShouldFail: new Set(),
+  removeShouldFail: new Set(),
   deletedPlaylistIds: new Set(),
   addVisible: true,
   nextId: 90000,
@@ -90,6 +91,9 @@ function addFileToLibrary(filePath) {
 
 function removeTrackFromPlaylist(playlistId, musicAppTrackId) {
   calls.removeTrackFromPlaylist.push({ playlistId: String(playlistId), musicAppTrackId: String(musicAppTrackId) });
+  if (state.removeShouldFail.has(String(musicAppTrackId))) {
+    return Promise.reject(new Error("Music.app track doesn't understand the message 'delete' (-1708)"));
+  }
   const key = String(playlistId);
   const list = state.tracksByPlaylist[key];
   if (list) {
@@ -156,6 +160,9 @@ module.exports = {
   __setDownloadShouldFail(musicAppTrackId) {
     state.downloadShouldFail.add(String(musicAppTrackId));
   },
+  __setRemoveShouldFail(musicAppTrackId) {
+    state.removeShouldFail.add(String(musicAppTrackId));
+  },
   __wasDeleted(playlistId) {
     return state.deletedPlaylistIds.has(String(playlistId));
   },
@@ -167,7 +174,7 @@ module.exports = {
   },
   __calls: calls,
   __reset() {
-    state = { tracksByPlaylist: {}, downloadShouldFail: new Set(), deletedPlaylistIds: new Set(), addVisible: true, nextId: 90000, playlists: [] };
+    state = { tracksByPlaylist: {}, downloadShouldFail: new Set(), removeShouldFail: new Set(), deletedPlaylistIds: new Set(), addVisible: true, nextId: 90000, playlists: [] };
     for (const key of Object.keys(calls)) calls[key].length = 0;
   },
 };

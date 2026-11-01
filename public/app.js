@@ -341,6 +341,9 @@
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Couldn't apply that match");
+      if (data.warning) {
+        showToast(`${data.warning} ${data.removalError || ""}`.trim(), { error: true, durationMs: 12000 });
+      }
     } catch (err) {
       showError("Couldn't apply that match.", err.message);
       return;
@@ -482,6 +485,8 @@
 
     const parts = [];
     if (r.fixed.length) parts.push(`${r.fixed.length} fixed`);
+    const entriesRemaining = r.fixed.filter((item) => item.warning).length;
+    if (entriesRemaining) parts.push(`${entriesRemaining} original ${entriesRemaining === 1 ? "entry" : "entries"} may remain`);
     if (r.downloading.length) parts.push(`${r.downloading.length} downloading via Apple Music`);
     if (r.unsupported.length) parts.push(`${r.unsupported.length} couldn't be downloaded`);
     if (r.needsReview.length) parts.push(`${r.needsReview.length} need your input`);
@@ -515,7 +520,7 @@
     const fixedHtml = r.fixed
       .map(
         (item) =>
-          `<div class="restore-fixed-item">✓ ${item.title || "(untitled)"}${item.artist ? ` — ${escapeAttr(item.artist)}` : ""} <span class="restore-fixed-path">→ ${escapeAttr(filePathBasename(item.matchedPath))}</span></div>`
+          `<div class="restore-fixed-item">✓ ${item.title || "(untitled)"}${item.artist ? ` — ${escapeAttr(item.artist)}` : ""} <span class="restore-fixed-path">→ ${escapeAttr(filePathBasename(item.matchedPath))}</span>${item.warning ? `<div class="restore-warning">${escapeAttr(item.warning)}${item.removalError ? ` Music.app: ${escapeAttr(item.removalError)}` : ""}</div>` : ""}</div>`
       )
       .join("");
 

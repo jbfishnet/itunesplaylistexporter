@@ -1,6 +1,14 @@
 {
   "releases": [
     {
+      "version": "1.2.8",
+      "date": "2026-11-02",
+      "changes": [
+        "Treat restore as partial success when Music.app adds a replacement but refuses to delete the original playlist entry.",
+        "Refresh the playlist and show a warning with the Music.app error instead of reporting that the match was not applied."
+      ]
+    },
+    {
       "version": "1.2.7",
       "date": "2026-11-01",
       "changes": [
