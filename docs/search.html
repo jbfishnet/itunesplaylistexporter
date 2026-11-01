@@ -103,9 +103,11 @@
       <p>
         When text search finds no plausible result, the enrichment queue can also
         fingerprint the audio locally with Chromaprint and query AcoustID. The
-        native app stores an optional free AcoustID application key in macOS
-        Keychain; only the fingerprint and duration are sent to AcoustID, not the
-        audio file. The Configuration page can test the key using a synthetic
+        native app stores an optional free AcoustID application key in the user's
+        Application Support folder with account-only file permissions, outside
+        the app bundle so it survives app updates; only the fingerprint and
+        duration are sent to AcoustID, not the audio file. The Configuration
+        page can test the key using a synthetic
         silence fingerprint, and warns when the key is missing or rejected.
         AcoustID's catalog is community-built and is not as broad as Shazam's.
         Without a key, this fallback is disabled. A single Not Found track can

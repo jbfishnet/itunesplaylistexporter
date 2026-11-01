@@ -1,5 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
 
 const {
   identifyByFingerprint,
@@ -7,8 +10,6 @@ const {
   getAcoustidStatus,
   checkAcoustidKey,
   getApiError,
-  KEYCHAIN_SERVICE,
-  KEYCHAIN_ACCOUNT,
 } = require("../src/acoustId");
 
 function withApiKey(key, fn) {
@@ -40,41 +41,99 @@ test("identifyByFingerprint is a cheap no-op with no API key configured — neve
   assert.equal(fetchCalled, false);
 });
 
-test("readApiKey prefers the environment and falls back to the macOS Keychain", async () => {
+test("readApiKey prefers an environment key and reads the macOS Application Support fallback", async (t) => {
+  const supportDir = await fs.mkdtemp(path.join(os.tmpdir(), "ple-acoustid-key-"));
+  t.after(() => fs.rm(supportDir, { recursive: true, force: true }));
+  const keyFile = path.join(supportDir, "acoustid-api-key");
+  await fs.writeFile(keyFile, "stored-key\n", { mode: 0o600 });
+  assert.equal((await fs.stat(keyFile)).mode & 0o777, 0o600);
+
   assert.equal(await readApiKey({ env: { ACOUSTID_API_KEY: " env-key " }, platform: "darwin" }), "env-key");
   assert.equal(await readApiKey({ env: {}, platform: "linux" }), null);
-
-  const key = await readApiKey({
-    env: {},
+  assert.equal(await readApiKey({
+    env: { PLE_ACOUSTID_KEY_FILE: keyFile },
     platform: "darwin",
-    execFileFn: (command, args, options, callback) => {
-      assert.equal(command, "/usr/bin/security");
-      assert.deepEqual(args, ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"]);
-      assert.equal(options.timeout, 5000);
-      callback(null, "stored-key\n", "");
-    },
-  });
-  assert.equal(key, "stored-key");
+  }), "stored-key");
+  assert.equal(await readApiKey({
+    env: { ACOUSTID_API_KEY: "override", PLE_ACOUSTID_KEY_FILE: keyFile },
+    platform: "darwin",
+  }), "override");
 });
 
-test("readApiKey returns null when no Keychain item exists and surfaces other Keychain failures", async () => {
-  const missingKey = await readApiKey({
-    env: {},
+test("readApiKey handles a missing key file and surfaces other file errors without invoking Keychain", async (t) => {
+  const supportDir = await fs.mkdtemp(path.join(os.tmpdir(), "ple-acoustid-key-"));
+  t.after(() => fs.rm(supportDir, { recursive: true, force: true }));
+  const missingPath = path.join(supportDir, "missing-key");
+  const directoryPath = path.join(supportDir, "not-a-key-file");
+  await fs.mkdir(directoryPath);
+  let securityCliCalled = false;
+  const options = {
     platform: "darwin",
-    execFileFn: (command, args, options, callback) => {
-      callback(Object.assign(new Error("not found"), { code: 44 }), "", "The specified item could not be found in the keychain.");
-    },
-  });
-  assert.equal(missingKey, null);
+    execFileFn: () => { securityCliCalled = true; },
+  };
+  assert.equal(await readApiKey({
+    ...options,
+    env: { PLE_ACOUSTID_KEY_FILE: missingPath },
+  }), null);
+  await assert.rejects(readApiKey({
+    ...options,
+    env: { PLE_ACOUSTID_KEY_FILE: directoryPath },
+  }), /Couldn't read the local AcoustID key file/);
+  assert.equal(securityCliCalled, false);
+});
 
-  await assert.rejects(
-    readApiKey({
-      env: {},
-      platform: "darwin",
-      execFileFn: (command, args, options, callback) => callback(new Error("Keychain locked"), "", "User interaction is not allowed."),
-    }),
-    /User interaction is not allowed/
-  );
+test("the saved key survives replacing the app bundle because it lives in Application Support", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "ple-acoustid-upgrade-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const supportDir = path.join(home, "Library", "Application Support", "Playlist Exporter");
+  const keyFile = path.join(supportDir, "acoustid-api-key");
+  const oldApp = path.join(home, "Applications", "Playlist Exporter 1.2.2.app");
+  const newApp = path.join(home, "Applications", "Playlist Exporter 1.2.3.app");
+  await fs.mkdir(supportDir, { recursive: true });
+  await fs.mkdir(oldApp, { recursive: true });
+  await fs.writeFile(keyFile, "persistent-key\n", { mode: 0o600 });
+
+  const readFromInstalledApp = () => readApiKey({
+    env: { PLE_ACOUSTID_KEY_FILE: keyFile },
+    platform: "darwin",
+  });
+  assert.equal(await readFromInstalledApp(), "persistent-key");
+  await fs.rm(oldApp, { recursive: true });
+  await fs.mkdir(newApp, { recursive: true });
+  assert.equal(await readFromInstalledApp(), "persistent-key");
+});
+
+test("getAcoustidStatus identifies the Application Support key source", async (t) => {
+  const supportDir = await fs.mkdtemp(path.join(os.tmpdir(), "ple-acoustid-key-"));
+  t.after(() => fs.rm(supportDir, { recursive: true, force: true }));
+  const keyFile = path.join(supportDir, "acoustid-api-key");
+  await fs.writeFile(keyFile, "stored-key\n", { mode: 0o600 });
+  const previous = process.env.PLE_ACOUSTID_KEY_FILE;
+  process.env.PLE_ACOUSTID_KEY_FILE = keyFile;
+  try {
+    const status = await getAcoustidStatus();
+    assert.equal(status.configured, true);
+    assert.equal(status.source, "application_support");
+  } finally {
+    if (previous === undefined) delete process.env.PLE_ACOUSTID_KEY_FILE;
+    else process.env.PLE_ACOUSTID_KEY_FILE = previous;
+  }
+});
+
+test("getAcoustidStatus reports unreadable local key files instead of treating them as missing", async (t) => {
+  const supportDir = await fs.mkdtemp(path.join(os.tmpdir(), "ple-acoustid-key-"));
+  t.after(() => fs.rm(supportDir, { recursive: true, force: true }));
+  const previous = process.env.PLE_ACOUSTID_KEY_FILE;
+  process.env.PLE_ACOUSTID_KEY_FILE = supportDir;
+  try {
+    const status = await getAcoustidStatus();
+    assert.equal(status.configured, false);
+    assert.equal(status.state, "error");
+    assert.match(status.message, /local AcoustID key file/);
+  } finally {
+    if (previous === undefined) delete process.env.PLE_ACOUSTID_KEY_FILE;
+    else process.env.PLE_ACOUSTID_KEY_FILE = previous;
+  }
 });
 
 test("getAcoustidStatus reports a missing key without returning credentials", async () => {
@@ -82,6 +141,35 @@ test("getAcoustidStatus reports a missing key without returning credentials", as
   assert.equal(status.configured, false);
   assert.equal(status.state, "missing");
   assert.equal(JSON.stringify(status).includes("test-key"), false);
+});
+
+test("checkAcoustidKey uses the saved Application Support key just like the native app", async (t) => {
+  const supportDir = await fs.mkdtemp(path.join(os.tmpdir(), "ple-acoustid-key-"));
+  t.after(() => fs.rm(supportDir, { recursive: true, force: true }));
+  const keyFile = path.join(supportDir, "acoustid-api-key");
+  await fs.writeFile(keyFile, "stored-key\n", { mode: 0o600 });
+  const previous = process.env.PLE_ACOUSTID_KEY_FILE;
+  const previousApiKey = process.env.ACOUSTID_API_KEY;
+  delete process.env.ACOUSTID_API_KEY;
+  process.env.PLE_ACOUSTID_KEY_FILE = keyFile;
+  try {
+    let requestedUrl = "";
+    const result = await checkAcoustidKey({
+      fpcalcFn: async () => ({ fingerprint: "synthetic-silence", duration: 3 }),
+      fetchFn: async (url) => {
+        requestedUrl = url;
+        return { ok: true, json: async () => ({ status: "ok", results: [] }) };
+      },
+    });
+    assert.equal(result.valid, true);
+    assert.equal(result.source, "application_support");
+    assert.match(requestedUrl, /client=stored-key/);
+  } finally {
+    if (previous === undefined) delete process.env.PLE_ACOUSTID_KEY_FILE;
+    else process.env.PLE_ACOUSTID_KEY_FILE = previous;
+    if (previousApiKey === undefined) delete process.env.ACOUSTID_API_KEY;
+    else process.env.ACOUSTID_API_KEY = previousApiKey;
+  }
 });
 
 test("checkAcoustidKey verifies a key using a local synthetic fingerprint", async () => {

@@ -15,6 +15,7 @@ import Cocoa
 import WebKit
 import UserNotifications
 import Security
+import LocalAuthentication
 
 let port = 4173
 let serverURL = URL(string: "http://localhost:\(port)/")!
@@ -25,6 +26,8 @@ let appSupportDir: URL = {
     try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     return base
 }()
+
+let acoustidKeyFile = appSupportDir.appendingPathComponent("acoustid-api-key")
 
 let logDir: URL = {
     let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
@@ -158,6 +161,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             )
             return
         }
+        migrateLegacyAcoustidKeyIfAvailable()
         guard let nodePath = findNode() else {
             showFatalAlert(
                 title: "Node.js not found",
@@ -178,6 +182,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             "PLE_NO_OPEN": "1",
             "PORT": String(port),
             "PLE_LIBRARY_DB": appSupportDir.appendingPathComponent("library.sqlite3").path,
+            "PLE_ACOUSTID_KEY_FILE": acoustidKeyFile.path,
         ]
 
         let logPath = logDir.appendingPathComponent("server.log").path
@@ -258,10 +263,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "pleSaveAcoustidKey",
            let key = message.body as? String {
-            let status = saveAcoustidKey(key.trimmingCharacters(in: .whitespacesAndNewlines))
-            let success = status == errSecSuccess
+            let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let success = saveAcoustidKey(trimmedKey)
             let detail = success
-                ? (key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "removed" : "saved")
+                ? (trimmedKey.isEmpty ? "removed" : "saved")
                 : "failed"
             DispatchQueue.main.async {
                 self.webView.evaluateJavaScript(
@@ -269,7 +274,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
                 )
             }
             if !success {
-                NSLog("Playlist Exporter couldn't save the AcoustID key to Keychain (status %d)", status)
+                NSLog("Playlist Exporter couldn't save the local AcoustID key file")
             }
             return
         }
@@ -296,25 +301,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
     }
 
-    func saveAcoustidKey(_ key: String) -> OSStatus {
+    func saveAcoustidKey(_ key: String) -> Bool {
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: appSupportDir.path)
+            if key.isEmpty {
+                if fileManager.fileExists(atPath: acoustidKeyFile.path) {
+                    try fileManager.removeItem(at: acoustidKeyFile)
+                }
+            } else {
+                try Data(key.utf8).write(to: acoustidKeyFile, options: .atomic)
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: acoustidKeyFile.path)
+            }
+            return true
+        } catch {
+            NSLog("Playlist Exporter couldn't save the local AcoustID key file: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    func migrateLegacyAcoustidKeyIfAvailable() {
+        guard !FileManager.default.fileExists(atPath: acoustidKeyFile.path) else { return }
+        let authenticationContext = LAContext()
+        authenticationContext.interactionNotAllowed = true
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "com.janboike.playlistexporter.acoustid",
             kSecAttrAccount as String: "api-key",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: authenticationContext,
         ]
-        if key.isEmpty {
-            let status = SecItemDelete(query as CFDictionary)
-            return status == errSecItemNotFound ? errSecSuccess : status
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let key = String(data: data, encoding: .utf8),
+              !key.isEmpty else {
+            if status != errSecItemNotFound && status != errSecInteractionNotAllowed && status != errSecAuthFailed {
+                NSLog("Playlist Exporter couldn't silently migrate the legacy AcoustID key (status %d)", status)
+            }
+            return
         }
-
-        let secret = Data(key.utf8)
-        let updateStatus = SecItemUpdate(query as CFDictionary, [kSecValueData as String: secret] as CFDictionary)
-        if updateStatus == errSecItemNotFound {
-            var item = query
-            item[kSecValueData as String] = secret
-            return SecItemAdd(item as CFDictionary, nil)
-        }
-        return updateStatus
+        _ = saveAcoustidKey(key)
     }
 
     func requestNotificationPermission() {

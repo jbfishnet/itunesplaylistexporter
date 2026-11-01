@@ -28,7 +28,9 @@
     statusTitle.textContent = title;
     statusMessage.textContent = data.message || message;
     if (data.source === "environment") {
-      statusMessage.textContent += " This server uses an environment key; save the key to macOS Keychain for the native app.";
+      statusMessage.textContent += " This server uses an environment key; it takes precedence over the saved local key.";
+    } else if (data.source === "application_support") {
+      statusMessage.textContent += " The key is loaded from this Mac's persistent Application Support folder.";
     }
     const needsAttention = [
       "missing",
@@ -83,7 +85,7 @@
     }
 
     saveButton.disabled = true;
-    feedback.textContent = "Saving to macOS Keychain…";
+    feedback.textContent = "Saving on this Mac…";
     handler.postMessage(keyInput.value.trim());
   });
 
@@ -92,11 +94,11 @@
     keyInput.value = "";
     if (event.detail.success) {
       feedback.textContent = event.detail.status === "saved"
-        ? "Key saved securely."
-        : "Saved AcoustID key removed from macOS Keychain.";
+        ? "Key saved on this Mac."
+        : "Saved AcoustID key removed from this Mac.";
       checkStatus(event.detail.status === "saved");
     } else {
-      feedback.textContent = "Couldn't save the key to macOS Keychain. Check the app log for details.";
+      feedback.textContent = "Couldn't save the local key file. Check the app log and available disk space.";
     }
   });
 

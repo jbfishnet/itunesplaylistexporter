@@ -1,41 +1,38 @@
-const { execFile } = require("child_process");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
 
 const ACOUSTID_LOOKUP_URL = "https://api.acoustid.org/v2/lookup";
 const FPCALC_TIMEOUT_MS = 30_000;
-const KEYCHAIN_SERVICE = "com.janboike.playlistexporter.acoustid";
-const KEYCHAIN_ACCOUNT = "api-key";
 let credentialStatus = { state: "unknown", message: null, checkedAt: null };
 
 function updateCredentialStatus(state, message = null) {
   credentialStatus = { state, message, checkedAt: new Date().toISOString() };
 }
 
-function readApiKey({ env = process.env, platform = process.platform, execFileFn = execFile } = {}) {
-  const environmentKey = env.ACOUSTID_API_KEY?.trim();
-  if (environmentKey) return Promise.resolve(environmentKey);
-  if (platform !== "darwin") return Promise.resolve(null);
+function getApiKeyFilePath(env = process.env, platform = process.platform) {
+  if (env.PLE_ACOUSTID_KEY_FILE?.trim()) return env.PLE_ACOUSTID_KEY_FILE.trim();
+  if (platform !== "darwin") return null;
+  return path.join(os.homedir(), "Library", "Application Support", "Playlist Exporter", "acoustid-api-key");
+}
 
-  return new Promise((resolve, reject) => {
-    execFileFn(
-      "/usr/bin/security",
-      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"],
-      { timeout: 5000 },
-      (err, stdout, stderr) => {
-        if (!err) {
-          resolve(stdout.trim() || null);
-          return;
-        }
-        if (/could not be found|not found in the keychain/i.test(stderr || "")) {
-          resolve(null);
-          return;
-        }
-        reject(new Error(stderr?.trim() || err.message));
-      }
-    );
-  });
+function getApiKeySource(env = process.env, platform = process.platform) {
+  if (env.ACOUSTID_API_KEY?.trim()) return "environment";
+  return getApiKeyFilePath(env, platform) ? "application_support" : null;
+}
+
+async function readApiKey({ env = process.env, platform = process.platform, keyFilePath } = {}) {
+  const environmentKey = env.ACOUSTID_API_KEY?.trim();
+  if (environmentKey) return environmentKey;
+
+  const filePath = keyFilePath || getApiKeyFilePath(env, platform);
+  if (!filePath) return null;
+  try {
+    return (await fs.readFile(filePath, "utf8")).trim() || null;
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw new Error(`Couldn't read the local AcoustID key file: ${err.message}`);
+  }
 }
 
 function runFpcalc(filePath) {
@@ -200,14 +197,10 @@ async function getAcoustidStatus({ apiKeyFn = readApiKey } = {}) {
     } else if (credentialStatus.state === "missing") {
       credentialStatus = { state: "unknown", message: null, checkedAt: null };
     }
-    const source = apiKey
-      ? process.env.ACOUSTID_API_KEY?.trim()
-        ? "environment"
-        : "keychain"
-      : null;
+    const source = apiKey ? getApiKeySource() : null;
     return { configured: Boolean(apiKey), source, ...credentialStatus };
   } catch (err) {
-    updateCredentialStatus("error", `Couldn't read the AcoustID key from macOS Keychain: ${err.message}`);
+    updateCredentialStatus("error", err.message);
     return { configured: false, source: null, ...credentialStatus };
   }
 }
@@ -217,7 +210,7 @@ async function checkAcoustidKey({ apiKeyFn = readApiKey, fpcalcFn = runFpcalc, f
   try {
     apiKey = await apiKeyFn();
   } catch (err) {
-    updateCredentialStatus("error", `Couldn't read the AcoustID key from macOS Keychain: ${err.message}`);
+    updateCredentialStatus("error", err.message);
     return { configured: false, valid: false, source: null, ...credentialStatus };
   }
   if (!apiKey) {
@@ -230,14 +223,14 @@ async function checkAcoustidKey({ apiKeyFn = readApiKey, fpcalcFn = runFpcalc, f
     fingerprint = await getSyntheticFingerprint(fpcalcFn);
   } catch (err) {
     updateCredentialStatus("fingerprint_unavailable", `Couldn't create the local test fingerprint: ${err.message}`);
-    return { configured: true, valid: false, source: process.env.ACOUSTID_API_KEY?.trim() ? "environment" : "keychain", ...credentialStatus };
+    return { configured: true, valid: false, source: getApiKeySource(), ...credentialStatus };
   }
 
   const result = await queryAcoustId(fingerprint, apiKey, fetchFn);
   return {
     configured: true,
     valid: result.ok,
-    source: process.env.ACOUSTID_API_KEY?.trim() ? "environment" : "keychain",
+    source: getApiKeySource(),
     ...credentialStatus,
   };
 }
@@ -248,8 +241,9 @@ async function checkAcoustidKey({ apiKeyFn = readApiKey, fpcalcFn = runFpcalc, f
  * last resort when text search finds nothing, since it doesn't care how
  * messy the filename or tags are. A deliberate no-op (returns null, cheaply,
  * without ever touching the network or spawning fpcalc) whenever no
- * ACOUSTID_API_KEY is configured. The native app reads its key from the
- * macOS Keychain; command-line use can still provide the environment variable.
+ * ACOUSTID_API_KEY or the macOS Application Support key file is configured.
+ * The native app stores the key outside the replaceable app bundle; command-line
+ * use can still provide the environment variable.
  */
 async function identifyByFingerprint(
   filePath,
@@ -259,7 +253,7 @@ async function identifyByFingerprint(
   try {
     apiKey = await apiKeyFn();
   } catch (err) {
-    updateCredentialStatus("error", `Couldn't read the AcoustID key from macOS Keychain: ${err.message}`);
+    updateCredentialStatus("error", err.message);
     return null;
   }
   if (!apiKey) {
@@ -301,6 +295,6 @@ module.exports = {
   getAcoustidStatus,
   checkAcoustidKey,
   getApiError,
-  KEYCHAIN_SERVICE,
-  KEYCHAIN_ACCOUNT,
+  getApiKeyFilePath,
+  getApiKeySource,
 };

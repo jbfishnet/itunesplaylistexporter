@@ -346,11 +346,11 @@
         </div>
         <div class="notification-actions">
           <input class="search" type="password" id="acoustidApiKey" autocomplete="new-password" placeholder="Paste AcoustID application key" />
-          <button type="button" class="btn-primary" id="saveAcoustidApiKeyBtn">Save key to macOS Keychain</button>
+          <button type="button" class="btn-primary" id="saveAcoustidApiKeyBtn">Save key on this Mac</button>
           <button type="button" class="btn" id="checkAcoustidApiKeyBtn">Test connection</button>
           <span class="library-meta" id="acoustidKeyStatus" aria-live="polite"></span>
         </div>
-        <p class="library-meta">The key is never displayed again after saving. Leave the field blank and save to remove it. Testing uses a locally generated silence fingerprint, not a song. Select a Not Found track and choose “Identify selected now” to retry it.</p>
+        <p class="library-meta">The key is stored in your macOS account's Application Support folder with access limited to your account, outside the app bundle so it survives updates. The app does not request Keychain access. Leave the field blank and save to remove it. Testing uses a locally generated silence fingerprint, not a song. Select a Not Found track and choose “Identify selected now” to retry it.</p>
       </div>
     </div>
 
