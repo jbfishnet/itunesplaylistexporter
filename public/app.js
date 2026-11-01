@@ -6,7 +6,7 @@
 
   let playlists = [];               // [{id, name, trackCount}]
   const selectedIds = new Set();
-  let enrichedMultiSelect = false;
+  const sectionMultiSelect = { enriched: false, exportable: false };
   const trackCache = new Map();     // id -> tracks[] (classified)
   const trackSyncedAt = new Map();  // id -> ms timestamp of that playlist's last successful sync
   const errorCache = new Map();     // id -> error message string
@@ -645,9 +645,11 @@
     });
   }
 
-  function buildPlaylistItem(p, { enriched = false } = {}) {
+  function buildPlaylistItem(p, { section = null } = {}) {
     const checked = selectedIds.has(p.id);
-    const showCheckbox = !enriched || enrichedMultiSelect;
+    const hasSingleSelect = section === "enriched" || section === "exportable";
+    const multiSelect = hasSingleSelect && sectionMultiSelect[section];
+    const showCheckbox = !hasSingleSelect || multiSelect;
     const item = document.createElement("div");
     item.className = "playlist-item" + (checked ? " checked" : "");
 
@@ -679,7 +681,7 @@
       <button type="button" class="playlist-menu-btn" data-playlist-menu title="Playlist options">⋯</button>
     `;
     const selectPlaylist = () => {
-      if (enriched && !enrichedMultiSelect) {
+      if (hasSingleSelect && !multiSelect) {
         selectedIds.clear();
         selectedIds.add(p.id);
         fetchTracksFor(p.id);
@@ -708,7 +710,7 @@
       if (e.target.closest("[data-playlist-menu], button, input")) return;
       selectPlaylist();
     });
-    if (enriched && !enrichedMultiSelect) {
+    if (hasSingleSelect && !multiSelect) {
       item.setAttribute("role", "button");
       item.setAttribute("tabindex", "0");
       item.setAttribute("aria-pressed", String(checked));
@@ -779,26 +781,31 @@
       const heading = document.createElement("div");
       heading.className = `section-heading ${className}`;
       heading.innerHTML = `${label} <span class="section-count">— ${list.length}</span>`;
-      if (className === "enriched") {
+      if (className === "enriched" || className === "exportable") {
+        const multiSelect = sectionMultiSelect[className];
+        const sectionName = className === "enriched" ? "enriched copies" : "ready-to-export playlists";
         const modeButton = document.createElement("button");
         modeButton.type = "button";
         modeButton.className = "enriched-multiselect-btn";
-        modeButton.textContent = enrichedMultiSelect ? "Done" : "Select multiple";
-        modeButton.setAttribute("aria-pressed", String(enrichedMultiSelect));
-        modeButton.title = enrichedMultiSelect
-          ? "Return to selecting one enriched copy at a time"
-          : "Enable selecting multiple enriched copies";
+        modeButton.textContent = multiSelect ? "Done" : "Select multiple";
+        modeButton.setAttribute("aria-pressed", String(multiSelect));
+        modeButton.title = multiSelect
+          ? `Return to selecting one ${sectionName} at a time`
+          : `Enable selecting multiple ${sectionName}`;
         modeButton.addEventListener("click", () => {
-          if (enrichedMultiSelect) {
-            const selectedEnriched = [...selectedIds].filter((id) =>
-              isEnrichedCopy(playlists.find((playlist) => playlist.id === id)?.name)
-            );
-            if (selectedEnriched.length > 1) {
-              const keepId = selectedEnriched[selectedEnriched.length - 1];
-              selectedEnriched.filter((id) => id !== keepId).forEach((id) => selectedIds.delete(id));
+          if (sectionMultiSelect[className]) {
+            const selectedInSection = [...selectedIds].filter((id) => {
+              const selectedPlaylist = playlists.find((playlist) => playlist.id === id);
+              return className === "enriched"
+                ? isEnrichedCopy(selectedPlaylist?.name)
+                : selectedPlaylist && !isEnrichedCopy(selectedPlaylist.name);
+            });
+            if (selectedInSection.length > 1) {
+              const keepId = selectedInSection[selectedInSection.length - 1];
+              selectedInSection.filter((id) => id !== keepId).forEach((id) => selectedIds.delete(id));
             }
           }
-          enrichedMultiSelect = !enrichedMultiSelect;
+          sectionMultiSelect[className] = !sectionMultiSelect[className];
           renderSidebar();
           renderMain();
         });
@@ -806,7 +813,9 @@
       }
       listEl.appendChild(heading);
       sortPlaylists(list).forEach((p) =>
-        listEl.appendChild(buildPlaylistItem(p, { enriched: className === "enriched" }))
+        listEl.appendChild(buildPlaylistItem(p, {
+          section: className === "enriched" || className === "exportable" ? className : null,
+        }))
       );
     };
 

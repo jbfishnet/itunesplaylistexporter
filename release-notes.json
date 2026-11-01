@@ -1,6 +1,13 @@
 {
   "releases": [
     {
+      "version": "1.2.7",
+      "date": "2026-11-01",
+      "changes": [
+        "Ready to export playlists now select individually with one click by default and have an independent opt-in multi-select mode."
+      ]
+    },
+    {
       "version": "1.2.6",
       "date": "2026-11-01",
       "changes": [
