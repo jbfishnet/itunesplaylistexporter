@@ -1,6 +1,14 @@
 {
   "releases": [
     {
+      "version": "1.2.5",
+      "date": "2026-11-01",
+      "changes": [
+        "Fixed AcoustID connection testing by restoring the missing child-process execFile import required to run fpcalc.",
+        "Added an end-to-end Configuration test covering key entry, native-save bridge behavior, persistent storage, fingerprint generation, API response display, and an opt-in live-key check."
+      ]
+    },
+    {
       "version": "1.2.4",
       "date": "2026-11-01",
       "changes": [
