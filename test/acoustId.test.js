@@ -6,6 +6,7 @@ const {
   readApiKey,
   getAcoustidStatus,
   checkAcoustidKey,
+  getApiError,
   KEYCHAIN_SERVICE,
   KEYCHAIN_ACCOUNT,
 } = require("../src/acoustId");
@@ -127,6 +128,40 @@ test("checkAcoustidKey reports rejected credentials and network errors", async (
   });
   assert.equal(offline.state, "connection_error");
   assert.match(offline.message, /offline/);
+});
+
+test("AcoustID HTTP 400 exposes its invalid-key reason instead of a generic connection error", async () => {
+  const result = await checkAcoustidKey({
+    apiKeyFn: async () => "bad-key",
+    fpcalcFn: async () => ({ fingerprint: "silence", duration: 3 }),
+    fetchFn: async () => ({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ status: "error", error: { code: 4, message: "invalid API key" } }),
+    }),
+  });
+  assert.equal(result.state, "invalid");
+  assert.match(result.message, /HTTP 400/);
+  assert.match(result.message, /invalid API key/);
+  assert.match(result.message, /Replace it with the application key/);
+  assert.doesNotMatch(result.message, /bad-key/);
+});
+
+test("AcoustID HTTP 404 is reported as an endpoint error with response details", async () => {
+  const result = getApiError({ error: { message: "not found" } }, "", 404);
+  assert.equal(result.state, "service_error");
+  assert.match(result.message, /HTTP 404/);
+  assert.match(result.message, /not found/);
+});
+
+test("AcoustID non-JSON HTTP errors retain their response body for diagnosis", async () => {
+  const result = await checkAcoustidKey({
+    apiKeyFn: async () => "test-key",
+    fpcalcFn: async () => ({ fingerprint: "silence", duration: 3 }),
+    fetchFn: async () => ({ ok: false, status: 400, text: async () => "invalid fingerprint" }),
+  });
+  assert.equal(result.state, "request_error");
+  assert.match(result.message, /invalid fingerprint/);
 });
 
 test("identifyByFingerprint returns null (not a throw) when fpcalc fails or the file is unreadable", () =>

@@ -1,6 +1,13 @@
 {
   "releases": [
     {
+      "version": "1.2.2",
+      "date": "2026-11-01",
+      "changes": [
+        "Improved AcoustID error diagnostics, including invalid API key details, malformed request responses, and HTTP 404 endpoint errors."
+      ]
+    },
+    {
       "version": "1.2.1",
       "date": "2026-11-01",
       "changes": [

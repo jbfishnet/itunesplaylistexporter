@@ -15,6 +15,8 @@
     unknown: ["AcoustID key is saved but not tested", "Test the connection to check whether AcoustID accepts this key."],
     valid: ["AcoustID is ready", "The saved key was accepted. Fingerprinting will run after text search finds no match."],
     invalid: ["AcoustID key was rejected", "Replace the saved key with a valid application key and test again."],
+    request_error: ["AcoustID rejected the test request", "Check the detailed service response and try again."],
+    service_error: ["AcoustID service or endpoint error", "Check the AcoustID service and app version, then try again."],
     connection_error: ["Couldn't reach AcoustID", "Check your network connection, then test again. The key has not been confirmed."],
     fingerprint_unavailable: ["Couldn't run the fingerprint check", "Install Chromaprint (fpcalc), then test the connection again."],
     error: ["AcoustID configuration error", "Check the details below and the app log."],
@@ -28,7 +30,15 @@
     if (data.source === "environment") {
       statusMessage.textContent += " This server uses an environment key; save the key to macOS Keychain for the native app.";
     }
-    const needsAttention = ["missing", "invalid", "connection_error", "fingerprint_unavailable", "error"].includes(data.state);
+    const needsAttention = [
+      "missing",
+      "invalid",
+      "request_error",
+      "service_error",
+      "connection_error",
+      "fingerprint_unavailable",
+      "error",
+    ].includes(data.state);
     alertEl.style.display = needsAttention ? "flex" : "none";
     if (needsAttention) {
       alertText.textContent = data.message || message;

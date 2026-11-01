@@ -102,6 +102,42 @@ function apiErrorMessage(error) {
   return "AcoustID returned an unspecified error";
 }
 
+function getApiError(responseData, responseBody, httpStatus) {
+  const error = responseData?.error;
+  const code = error?.code;
+  const message = apiErrorMessage(error);
+  const invalidKey = code === 4 || /invalid api key|invalid client|unknown client/i.test(message);
+
+  if (invalidKey) {
+    return {
+      state: "invalid",
+      message: `AcoustID rejected the application key (HTTP ${httpStatus}): ${message}. Replace it with the application key from your AcoustID account.`,
+    };
+  }
+  if (httpStatus === 404) {
+    const detail = responseData?.error
+      ? message
+      : responseBody;
+    return {
+      state: "service_error",
+      message: `AcoustID's lookup endpoint returned HTTP 404${detail ? `: ${detail}` : ""}. Check the app version or service endpoint.`,
+    };
+  }
+  if (httpStatus) {
+    const detail = responseData?.error
+      ? message
+      : responseBody || `HTTP ${httpStatus}`;
+    return {
+      state: httpStatus >= 500 ? "service_error" : "request_error",
+      message: `AcoustID rejected the lookup request (HTTP ${httpStatus}): ${detail}`,
+    };
+  }
+  return {
+    state: "request_error",
+    message: `AcoustID rejected the lookup request: ${message}`,
+  };
+}
+
 async function queryAcoustId(fingerprint, apiKey, fetchFn) {
   const params = new URLSearchParams({
     client: apiKey,
@@ -119,21 +155,36 @@ async function queryAcoustId(fingerprint, apiKey, fetchFn) {
     updateCredentialStatus("connection_error", `Couldn't reach AcoustID: ${err.message}`);
     return { ok: false, error: credentialStatus.message };
   }
-  if (!response.ok) {
-    updateCredentialStatus("connection_error", `AcoustID returned HTTP ${response.status}`);
+  let data;
+  let responseBody = "";
+  try {
+    if (typeof response.text === "function") {
+      responseBody = await response.text();
+      data = responseBody ? JSON.parse(responseBody) : null;
+    } else if (typeof response.json === "function") {
+      data = await response.json();
+      responseBody = JSON.stringify(data);
+    } else {
+      throw new Error("Response has no readable body");
+    }
+  } catch (err) {
+    const status = response.status || 0;
+    if (!response.ok) {
+      const { state, message } = getApiError(null, responseBody, status);
+      updateCredentialStatus(state, message);
+      return { ok: false, error: credentialStatus.message };
+    }
+    updateCredentialStatus("service_error", `AcoustID returned invalid JSON: ${err.message}`);
     return { ok: false, error: credentialStatus.message };
   }
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (err) {
-    updateCredentialStatus("connection_error", `AcoustID returned invalid JSON: ${err.message}`);
+  if (!response.ok) {
+    const { state, message } = getApiError(data, "", response.status);
+    updateCredentialStatus(state, message);
     return { ok: false, error: credentialStatus.message };
   }
   if (data.status !== "ok") {
-    const message = apiErrorMessage(data.error);
-    updateCredentialStatus("invalid", `AcoustID rejected the application key: ${message}`);
+    const { state, message } = getApiError(data, responseBody, response.status);
+    updateCredentialStatus(state, message);
     return { ok: false, error: credentialStatus.message };
   }
 
@@ -249,6 +300,7 @@ module.exports = {
   readApiKey,
   getAcoustidStatus,
   checkAcoustidKey,
+  getApiError,
   KEYCHAIN_SERVICE,
   KEYCHAIN_ACCOUNT,
 };
