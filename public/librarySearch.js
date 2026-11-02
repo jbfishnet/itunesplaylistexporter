@@ -14,6 +14,9 @@
   let statusPollInFlight = false;
   let searchDebounceTimer = null;
   let lastQuery = "";
+  let musicPlaylists = null;
+  let playlistsLoadInFlight = false;
+  let latestResults = [];
 
   function formatRelativeTime(isoString) {
     if (!isoString) return "never";
@@ -202,7 +205,31 @@
   });
 
   function escapeAttr(str) {
-    return String(str).replace(/"/g, "&quot;");
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function escapeHtml(str) {
+    return escapeAttr(str).replace(/'/g, "&#39;");
+  }
+
+  async function loadMusicPlaylists() {
+    if (playlistsLoadInFlight || musicPlaylists !== null) return;
+    playlistsLoadInFlight = true;
+    try {
+      const res = await fetch("/api/playlists");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.hint ? `${data.error} ${data.hint}` : data.error);
+      musicPlaylists = data;
+      renderSearchResults(latestResults);
+    } catch (err) {
+      metaEl.textContent = `Couldn't load Music playlists: ${err.message}`;
+    } finally {
+      playlistsLoadInFlight = false;
+    }
   }
 
   function playButtonHtml(result) {
@@ -233,6 +260,55 @@
     });
   }
 
+  function playlistActionHtml(result) {
+    const options = musicPlaylists === null
+      ? `<option value="">Playlists unavailable</option>`
+      : musicPlaylists.length === 0
+        ? `<option value="">No playlists found</option>`
+        : `<option value="">Choose playlist…</option>${musicPlaylists
+          .map((playlist) => `<option value="${escapeAttr(playlist.id)}">${escapeHtml(playlist.name)}</option>`)
+          .join("")}`;
+    return `<div class="playlist-add-control">
+      <select class="playlist-add-select" data-add-track-id="${result.id}" aria-label="Playlist for ${escapeAttr(result.title || "track")}" ${result.protected || !musicPlaylists?.length ? "disabled" : ""}>${options}</select>
+      <span class="playlist-add-status" aria-live="polite"></span>
+    </div>`;
+  }
+
+  function bindPlaylistSelectors(container) {
+    container.querySelectorAll(".playlist-add-select[data-add-track-id]").forEach((select) => {
+      select.addEventListener("change", () => {
+        const status = select.closest(".playlist-add-control").querySelector(".playlist-add-status");
+        if (!select.value) {
+          window.PlaylistExporterPlaylistAdd.schedule(select, () => {});
+          status.textContent = "";
+          return;
+        }
+        status.textContent = "Adding in 2 seconds…";
+        window.PlaylistExporterPlaylistAdd.schedule(select, async (playlistId) => {
+          select.disabled = true;
+          status.textContent = "Adding and verifying in Music.app…";
+          try {
+            const res = await fetch(`/api/playlists/${encodeURIComponent(playlistId)}/add-track`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileId: Number(select.dataset.addTrackId) }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Couldn't verify the added track");
+            status.textContent = `Verified in "${data.playlist.name}"`;
+            document.dispatchEvent(new CustomEvent("ple:playlist-updated", {
+              detail: { playlist: data.playlist, track: data.track },
+            }));
+          } catch (err) {
+            status.textContent = err.message;
+          } finally {
+            select.disabled = false;
+          }
+        });
+      });
+    });
+  }
+
   function statusBadges(result) {
     const badges = [];
     if (result.protected) badges.push(`<span class="pill pill-protected"><span class="pill-dot"></span>Protected</span>`);
@@ -243,10 +319,39 @@
     return badges.join(" ");
   }
 
+  function renderSearchResults(results) {
+    if (results.length === 0) {
+      const emptyMessage = lastQuery.trim()
+        ? `No matches for "${escapeHtml(lastQuery)}".`
+        : "Type to search your indexed music library.";
+      resultsBody.innerHTML = `<tr><td colspan="7" class="empty-state">${emptyMessage}</td></tr>`;
+      return;
+    }
+
+    resultsBody.innerHTML = results
+      .map(
+        (r) => `
+        <tr>
+          <td><div class="title-cell">${playButtonHtml(r)}${revealButtonHtml(r)}<span><div class="track-title">${r.title || "(untitled)"}</div><div class="track-sub">${r.path}</div></span></div></td>
+          <td>${r.artist || ""}</td>
+          <td>${r.album || ""}</td>
+          <td>${r.genre || ""}</td>
+          <td class="col-format">${r.extension ? "." + r.extension : "—"}</td>
+          <td>${statusBadges(r)}</td>
+          <td>${playlistActionHtml(r)}</td>
+        </tr>`
+      )
+      .join("");
+    bindPlayButtons(resultsBody);
+    bindRevealButtons(resultsBody);
+    bindPlaylistSelectors(resultsBody);
+  }
+
   async function runSearch(query) {
     lastQuery = query;
     if (!query.trim()) {
-      resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">Type to search your indexed music library.</td></tr>`;
+      latestResults = [];
+      resultsBody.innerHTML = `<tr><td colspan="7" class="empty-state">Type to search your indexed music library.</td></tr>`;
       return;
     }
     try {
@@ -255,26 +360,8 @@
       if (query !== lastQuery) return; // a newer keystroke's request already landed
       if (!res.ok) throw new Error(data.error || "Search failed");
 
-      if (data.results.length === 0) {
-        resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state">No matches for "${query}".</td></tr>`;
-        return;
-      }
-
-      resultsBody.innerHTML = data.results
-        .map(
-          (r) => `
-        <tr>
-          <td><div class="title-cell">${playButtonHtml(r)}${revealButtonHtml(r)}<span><div class="track-title">${r.title || "(untitled)"}</div><div class="track-sub">${r.path}</div></span></div></td>
-          <td>${r.artist || ""}</td>
-          <td>${r.album || ""}</td>
-          <td>${r.genre || ""}</td>
-          <td class="col-format">${r.extension ? "." + r.extension : "—"}</td>
-          <td>${statusBadges(r)}</td>
-        </tr>`
-        )
-        .join("");
-      bindPlayButtons(resultsBody);
-      bindRevealButtons(resultsBody);
+      latestResults = data.results;
+      renderSearchResults(latestResults);
     } catch {
       resultsBody.innerHTML = `<tr><td colspan="6" class="empty-state error-state">Search failed — try again.</td></tr>`;
     }
@@ -293,6 +380,8 @@
     });
 
     if (tabName === "search") {
+      loadMusicPlaylists();
+      if (lastQuery.trim()) runSearch(lastQuery);
       loadStatus();
       loadFolders();
       if (!statusPollTimer) statusPollTimer = setInterval(loadStatus, 4000);

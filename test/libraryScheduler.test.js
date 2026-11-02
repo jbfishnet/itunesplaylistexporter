@@ -60,3 +60,23 @@ test("with no library roots configured yet, the scheduler runs without crashing 
   assert.equal(db.getStats().totalFiles, 0);
   assert.equal(scheduler.getState().lastResult.result, "no_roots_configured");
 });
+
+test("the scheduler reports each completed scan result to its event callback", async (t) => {
+  const db = openLibraryDb(":memory:");
+  t.after(() => db.close());
+  db.setLibraryRoots([makeRoot(t, "callback")]);
+  const completed = [];
+  const scheduler = createScheduler({
+    db,
+    intervalMs: 60_000,
+    onComplete: (result) => completed.push(result),
+  });
+  t.after(() => scheduler.stop());
+
+  scheduler.triggerNow();
+  await waitUntilIdle(scheduler);
+
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].result, "ok");
+  assert.equal(completed[0].filesTotal, 1);
+});

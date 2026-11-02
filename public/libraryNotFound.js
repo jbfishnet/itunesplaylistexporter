@@ -18,10 +18,13 @@
   const selectedCountEl = el("notfoundSelectedCount");
   const deleteSelectedBtn = el("notfoundDeleteSelectedBtn");
   const editSelectedBtn = el("notfoundEditSelectedBtn");
+  const guessSelectedBtn = el("notfoundGuessSelectedBtn");
+  const retrySelectedBtn = el("notfoundRetrySelectedBtn");
 
   const metadataEditOverlay = el("metadataEditOverlay");
   const metadataEditTitle = el("metadataEditTitle");
   const metadataEditSub = el("metadataEditSub");
+  const metadataPlaylistSelect = el("metadataPlaylistSelect");
   const metadataEditCancelBtn = el("metadataEditCancelBtn");
   const metadataEditSaveBtn = el("metadataEditSaveBtn");
   const metaFieldTitle = el("metaFieldTitle");
@@ -38,6 +41,7 @@
   // it's deleted, so there's no meaningful "selected across every page" any
   // list mutation wouldn't immediately invalidate. Cleared on every reload.
   const selectedIds = new Set();
+  let playlistLoadPromise = null;
 
   function escapeAttr(str) {
     return String(str).replace(/"/g, "&quot;");
@@ -87,6 +91,10 @@
     return `<button type="button" class="reveal-btn" data-edit-id="${row.id}" title="Edit metadata">✎</button>`;
   }
 
+  function guessButtonHtml(row) {
+    return `<button type="button" class="reveal-btn" data-guess-id="${row.id}" title="Guess metadata from the filename (AI)">✨</button>`;
+  }
+
   /** Unlike the Duplicates tab's permanent delete (safe because a
    * byte-identical copy is guaranteed to exist elsewhere), a Not Found file
    * usually has no such guarantee — moved to the actual macOS Trash instead
@@ -104,6 +112,8 @@
     selectedCountEl.textContent = count > 0 ? `${count} selected` : "";
     deleteSelectedBtn.style.display = count > 0 ? "" : "none";
     editSelectedBtn.style.display = count > 0 ? "" : "none";
+    guessSelectedBtn.style.display = count > 0 ? "" : "none";
+    retrySelectedBtn.style.display = count === 1 ? "" : "none";
     const rowCheckboxes = resultsBody.querySelectorAll(".notfound-row-checkbox");
     selectAllEl.checked = rowCheckboxes.length > 0 && Array.from(rowCheckboxes).every((cb) => cb.checked);
     selectAllEl.indeterminate = count > 0 && !selectAllEl.checked;
@@ -164,7 +174,33 @@
     metaFieldGenre.value = single ? singleRow.genre || "" : "";
     metaFieldYear.value = single ? singleRow.year || "" : "";
     metadataEditOverlay.classList.add("open");
+    loadMetadataPlaylists();
     metaFieldTitle.focus();
+  }
+
+  async function loadMetadataPlaylists() {
+    if (playlistLoadPromise) return playlistLoadPromise;
+    playlistLoadPromise = (async () => {
+      try {
+        const res = await fetch("/api/playlists");
+        const playlists = await res.json();
+        if (!res.ok) throw new Error(playlists.error || "Failed to load playlists");
+        const selected = metadataPlaylistSelect.value;
+        metadataPlaylistSelect.replaceChildren(new Option("Music library only (default)", ""));
+        for (const playlist of playlists) {
+          metadataPlaylistSelect.add(new Option(playlist.name, String(playlist.id)));
+        }
+        if (playlists.some((playlist) => String(playlist.id) === selected)) {
+          metadataPlaylistSelect.value = selected;
+        }
+      } catch (err) {
+        metadataEditSub.textContent =
+          `Couldn't load Music.app playlists: ${err.message}. The default Music library import remains available.`;
+      } finally {
+        playlistLoadPromise = null;
+      }
+    })();
+    return playlistLoadPromise;
   }
 
   function closeMetadataEdit() {
@@ -184,6 +220,74 @@
   editSelectedBtn.addEventListener("click", () => {
     if (selectedIds.size === 0) return;
     openMetadataEdit(Array.from(selectedIds), null);
+  });
+
+  // ---------- Per-track AI guess (filename-only, via Claude) ----------
+  // Never writes anything on its own — it opens the same edit modal used
+  // above, pre-filled with the guess, so the user always reviews (and can
+  // freely correct) before Save & Re-check actually applies it. This is the
+  // "ask the user to verify" path regardless of how confident the guess is.
+
+  function applySuggestionToFields(suggestion) {
+    metaFieldTitle.value = suggestion.title || "";
+    metaFieldArtist.value = suggestion.artist || "";
+    metaFieldAlbum.value = suggestion.album || "";
+    metaFieldGenre.value = suggestion.genre || "";
+    metaFieldYear.value = suggestion.year || "";
+    const confidenceNote =
+      suggestion.confidence === "high" ? "AI guess (fairly confident):" : "AI guess (not very confident — double-check this):";
+    metadataEditSub.textContent = [confidenceNote, suggestion.reasoning].filter(Boolean).join(" ");
+  }
+
+  function bindGuessButtons(container, rows) {
+    container.querySelectorAll("[data-guess-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.guessId;
+        const row = rows.find((r) => String(r.id) === String(id));
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "…";
+        try {
+          const res = await fetch(`/api/library/not-found-files/${id}/guess-metadata`, { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Guess failed");
+          openMetadataEdit([id], row);
+          applySuggestionToFields(data.suggestion);
+        } catch (err) {
+          metaEl.textContent = `Couldn't guess metadata: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+    });
+  }
+
+  guessSelectedBtn.addEventListener("click", async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    guessSelectedBtn.disabled = true;
+    guessSelectedBtn.textContent = `Guessing metadata for ${ids.length} track${ids.length === 1 ? "" : "s"}…`;
+    try {
+      const res = await fetch("/api/library/not-found-files/guess-metadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Guess failed");
+      selectedIds.clear();
+      metaEl.textContent =
+        `Applied confident AI guesses to ${data.appliedCount} track${data.appliedCount === 1 ? "" : "s"} ` +
+        `(re-queued for another lookup) — ${data.needsReviewCount} need manual review, left unchanged. ` +
+        `Use the ✨ button on an individual track to review those.`;
+      loadNotFound();
+    } catch (err) {
+      metaEl.textContent = `Couldn't guess metadata: ${err.message}`;
+    } finally {
+      guessSelectedBtn.disabled = false;
+      guessSelectedBtn.textContent = "✨ Guess Metadata (AI)";
+    }
   });
 
   metadataEditCancelBtn.addEventListener("click", closeMetadataEdit);
@@ -210,19 +314,31 @@
       const res = await fetch("/api/library/not-found-files/manual-metadata", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: editingIds, metadata }),
+        body: JSON.stringify({
+          ids: editingIds,
+          metadata,
+          playlistId: metadataPlaylistSelect.value || null,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Save failed");
       closeMetadataEdit();
       selectedIds.clear();
-      metaEl.textContent = `Updated ${data.requeued} track${data.requeued === 1 ? "" : "s"} — re-queued for another online lookup with the new details.`;
+      const importErrors = data.results.filter((result) => result.musicError);
+      const destination = data.playlist ? ` in "${data.playlist.name}"` : " to the Music library";
+      const importSummary =
+        `${data.musicAdded} added${data.musicAlreadyPresent ? `, ${data.musicAlreadyPresent} already present` : ""}` +
+        `${data.musicFailed ? `, ${data.musicFailed} failed` : ""}`;
+      const errorDetails = importErrors.map((result) => `Track ${result.id}: ${result.musicError}`).join("; ");
+      metaEl.textContent =
+        `Updated ${data.requeued} track${data.requeued === 1 ? "" : "s"} and re-queued for another lookup; ` +
+        `${importSummary}${destination}.${errorDetails ? ` ${errorDetails}` : ""}`;
       loadNotFound();
     } catch (err) {
       metadataEditSub.textContent = `Couldn't save: ${err.message}`;
     } finally {
       metadataEditSaveBtn.disabled = false;
-      metadataEditSaveBtn.textContent = "Save & Re-check";
+      metadataEditSaveBtn.textContent = "Save & Add to Music";
     }
   });
 
@@ -256,12 +372,12 @@
         <tr>
           <td class="col-select"><input type="checkbox" class="notfound-row-checkbox" data-row-id="${r.id}" /></td>
           <td><div class="title-cell">${playButtonHtml(r)}${revealButtonHtml(r)}<span><div class="track-title">${r.title || "(untitled)"}</div><div class="track-sub">${r.path}</div></span></div></td>
+          <td class="col-format">${formatDuration(r.duration_sec)}</td>
           <td>${r.artist || ""}</td>
           <td>${r.album || ""}</td>
           <td>${r.genre || ""}</td>
           <td class="col-format">${r.extension ? "." + r.extension : "—"}</td>
-          <td class="col-format">${formatDuration(r.duration_sec)}</td>
-          <td>${editButtonHtml(r)}${deleteButtonHtml(r)}</td>
+          <td>${guessButtonHtml(r)}${editButtonHtml(r)}${deleteButtonHtml(r)}</td>
         </tr>`
         )
         .join("");
@@ -270,6 +386,7 @@
       bindRowSelection(resultsBody);
       bindDeleteButtons(resultsBody);
       bindEditButtons(resultsBody, rows);
+      bindGuessButtons(resultsBody, rows);
     }
 
     updateSelectionUI();
@@ -338,7 +455,35 @@
       metaEl.textContent = `Couldn't requeue — ${err.message}`;
     } finally {
       retryAllBtn.disabled = false;
-      retryAllBtn.textContent = "Retry all with improved matching";
+      retryAllBtn.textContent = "Retry all with audio matching";
+    }
+  });
+
+  retrySelectedBtn.addEventListener("click", async () => {
+    const id = Array.from(selectedIds)[0];
+    if (!id) return;
+    retrySelectedBtn.disabled = true;
+    retrySelectedBtn.textContent = "Identifying…";
+    try {
+      const res = await fetch(`/api/library/not-found-files/${id}/retry`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Retry failed");
+      metaEl.textContent = data.queued
+        ? "Queued for lookup; it is waiting for another enrichment request to finish."
+        : data.matched
+          ? "Audio identified and metadata updated."
+          : data.acoustid?.state === "missing"
+            ? "No AcoustID key is configured. Open Configuration to add one."
+            : ["invalid", "connection_error", "error", "fingerprint_unavailable"].includes(data.acoustid?.state)
+              ? `${data.acoustid.message || "AcoustID identification isn't available."} Open Configuration to review it.`
+          : "No match found this time. Check the filename and try another identification source.";
+      selectedIds.clear();
+      loadNotFound();
+    } catch (err) {
+      metaEl.textContent = `Couldn't retry identification: ${err.message}`;
+    } finally {
+      retrySelectedBtn.disabled = false;
+      retrySelectedBtn.textContent = "Identify selected now";
     }
   });
 

@@ -6,6 +6,7 @@
 
   let playlists = [];               // [{id, name, trackCount}]
   const selectedIds = new Set();
+  const sectionMultiSelect = { enriched: false, exportable: false };
   const trackCache = new Map();     // id -> tracks[] (classified)
   const trackSyncedAt = new Map();  // id -> ms timestamp of that playlist's last successful sync
   const errorCache = new Map();     // id -> error message string
@@ -242,6 +243,34 @@
         lastError = err;
         if (attempt < CLIENT_RETRY_ATTEMPTS) await sleep(CLIENT_RETRY_DELAYS_MS[attempt - 1]);
       }
+
+      async function refreshAddedPlaylist(id) {
+        while (fetching.has(id) || backgroundRefreshing.has(id)) await sleep(50);
+        fetching.add(id);
+        renderSidebar();
+        try {
+          const [tracks, playlistResponse] = await Promise.all([
+            fetchTracksOnce(id),
+            fetch("/api/playlists"),
+          ]);
+          const updatedPlaylists = await playlistResponse.json();
+          if (!playlistResponse.ok) throw new Error(updatedPlaylists.error || "Couldn't refresh Music.app playlists");
+          playlists = updatedPlaylists;
+          playlistsSyncedAt = Date.now();
+          trackCache.set(id, tracks);
+          trackSyncedAt.set(id, Date.now());
+          errorCache.delete(id);
+          autoHealAttempts.delete(id);
+          saveCache();
+          renderSidebar();
+          renderMain();
+        } catch (err) {
+          showToast(`Track was added, but the playlist view couldn't refresh: ${err.message}`, { error: true });
+        } finally {
+          fetching.delete(id);
+          renderSidebar();
+        }
+      }
     }
 
     if (lastError) {
@@ -312,6 +341,9 @@
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Couldn't apply that match");
+      if (data.warning) {
+        showToast(`${data.warning} ${data.removalError || ""}`.trim(), { error: true, durationMs: 12000 });
+      }
     } catch (err) {
       showError("Couldn't apply that match.", err.message);
       return;
@@ -453,6 +485,8 @@
 
     const parts = [];
     if (r.fixed.length) parts.push(`${r.fixed.length} fixed`);
+    const entriesRemaining = r.fixed.filter((item) => item.warning).length;
+    if (entriesRemaining) parts.push(`${entriesRemaining} original ${entriesRemaining === 1 ? "entry" : "entries"} may remain`);
     if (r.downloading.length) parts.push(`${r.downloading.length} downloading via Apple Music`);
     if (r.unsupported.length) parts.push(`${r.unsupported.length} couldn't be downloaded`);
     if (r.needsReview.length) parts.push(`${r.needsReview.length} need your input`);
@@ -486,7 +520,7 @@
     const fixedHtml = r.fixed
       .map(
         (item) =>
-          `<div class="restore-fixed-item">✓ ${item.title || "(untitled)"}${item.artist ? ` — ${escapeAttr(item.artist)}` : ""} <span class="restore-fixed-path">→ ${escapeAttr(filePathBasename(item.matchedPath))}</span></div>`
+          `<div class="restore-fixed-item">✓ ${item.title || "(untitled)"}${item.artist ? ` — ${escapeAttr(item.artist)}` : ""} <span class="restore-fixed-path">→ ${escapeAttr(filePathBasename(item.matchedPath))}</span>${item.warning ? `<div class="restore-warning">${escapeAttr(item.warning)}${item.removalError ? ` Music.app: ${escapeAttr(item.removalError)}` : ""}</div>` : ""}</div>`
       )
       .join("");
 
@@ -616,9 +650,12 @@
     });
   }
 
-  function buildPlaylistItem(p) {
+  function buildPlaylistItem(p, { section = null } = {}) {
     const checked = selectedIds.has(p.id);
-    const item = document.createElement("label");
+    const hasSingleSelect = section === "enriched" || section === "exportable";
+    const multiSelect = hasSingleSelect && sectionMultiSelect[section];
+    const showCheckbox = !hasSingleSelect || multiSelect;
+    const item = document.createElement("div");
     item.className = "playlist-item" + (checked ? " checked" : "");
 
     let metaExtra = "";
@@ -641,23 +678,54 @@
     }
 
     item.innerHTML = `
-      <input type="checkbox" class="playlist-checkbox" ${checked ? "checked" : ""} />
+      ${showCheckbox ? `<input type="checkbox" class="playlist-checkbox" ${checked ? "checked" : ""} />` : ""}
       <span class="playlist-text">
         <span class="playlist-name">${p.name}</span>
         <span class="playlist-meta">${p.trackCount} tracks${metaExtra}</span>
       </span>
       <button type="button" class="playlist-menu-btn" data-playlist-menu title="Playlist options">⋯</button>
     `;
-    item.querySelector(".playlist-checkbox").addEventListener("change", (e) => {
-      if (e.target.checked) {
+    const selectPlaylist = () => {
+      if (hasSingleSelect && !multiSelect) {
+        selectedIds.clear();
         selectedIds.add(p.id);
         fetchTracksFor(p.id);
-      } else {
-        selectedIds.delete(p.id);
+      } else if (showCheckbox) {
+        const checkbox = item.querySelector(".playlist-checkbox");
+        checkbox.checked = !checkbox.checked;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
       }
       renderSidebar();
       renderMain();
+    };
+    if (showCheckbox) {
+      item.querySelector(".playlist-checkbox").addEventListener("change", (e) => {
+        if (e.target.checked) {
+          selectedIds.add(p.id);
+          fetchTracksFor(p.id);
+        } else {
+          selectedIds.delete(p.id);
+        }
+        renderSidebar();
+        renderMain();
+      });
+    }
+    item.addEventListener("click", (e) => {
+      if (e.target.closest("[data-playlist-menu], button, input")) return;
+      selectPlaylist();
     });
+    if (hasSingleSelect && !multiSelect) {
+      item.setAttribute("role", "button");
+      item.setAttribute("tabindex", "0");
+      item.setAttribute("aria-pressed", String(checked));
+      item.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          selectPlaylist();
+        }
+      });
+    }
     const retryBtn = item.querySelector("[data-retry]");
     if (retryBtn) {
       retryBtn.addEventListener("click", (e) => {
@@ -718,8 +786,42 @@
       const heading = document.createElement("div");
       heading.className = `section-heading ${className}`;
       heading.innerHTML = `${label} <span class="section-count">— ${list.length}</span>`;
+      if (className === "enriched" || className === "exportable") {
+        const multiSelect = sectionMultiSelect[className];
+        const sectionName = className === "enriched" ? "enriched copies" : "ready-to-export playlists";
+        const modeButton = document.createElement("button");
+        modeButton.type = "button";
+        modeButton.className = "enriched-multiselect-btn";
+        modeButton.textContent = multiSelect ? "Done" : "Select multiple";
+        modeButton.setAttribute("aria-pressed", String(multiSelect));
+        modeButton.title = multiSelect
+          ? `Return to selecting one ${sectionName} at a time`
+          : `Enable selecting multiple ${sectionName}`;
+        modeButton.addEventListener("click", () => {
+          if (sectionMultiSelect[className]) {
+            const selectedInSection = [...selectedIds].filter((id) => {
+              const selectedPlaylist = playlists.find((playlist) => playlist.id === id);
+              return className === "enriched"
+                ? isEnrichedCopy(selectedPlaylist?.name)
+                : selectedPlaylist && !isEnrichedCopy(selectedPlaylist.name);
+            });
+            if (selectedInSection.length > 1) {
+              const keepId = selectedInSection[selectedInSection.length - 1];
+              selectedInSection.filter((id) => id !== keepId).forEach((id) => selectedIds.delete(id));
+            }
+          }
+          sectionMultiSelect[className] = !sectionMultiSelect[className];
+          renderSidebar();
+          renderMain();
+        });
+        heading.appendChild(modeButton);
+      }
       listEl.appendChild(heading);
-      sortPlaylists(list).forEach((p) => listEl.appendChild(buildPlaylistItem(p)));
+      sortPlaylists(list).forEach((p) =>
+        listEl.appendChild(buildPlaylistItem(p, {
+          section: className === "enriched" || className === "exportable" ? className : null,
+        }))
+      );
     };
 
     addSection("Enriched copies", "enriched", enrichedCopies);
@@ -1024,6 +1126,11 @@
     scheduleAutoHeal();
     scheduleBackgroundSync();
   }
+
+  document.addEventListener("ple:playlist-updated", (event) => {
+    const playlistId = String(event.detail?.playlist?.id || "");
+    if (playlistId) refreshAddedPlaylist(playlistId);
+  });
 
   init();
 })();

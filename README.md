@@ -100,8 +100,9 @@ This opens `http://localhost:4173` in your default browser.
 
 ### Native app
 
-For a real Mac app instead of a browser tab — Dock icon, its own window,
-Cmd+Q/Cmd+W/Cmd+C/Cmd+V, an About panel — build and install
+For a real Mac app instead of a browser tab — Dock icon, menu-bar item,
+its own window, native notifications, Cmd+Q/Cmd+W/Cmd+C/Cmd+V, an About panel —
+build and install
 `Playlist Exporter.app`:
 
 ```bash
@@ -125,12 +126,17 @@ logs live under that user's own `~/Library/Application Support/Playlist
 Exporter` and `~/Library/Logs/Playlist Exporter`, not inside the app
 bundle (which isn't writable once installed).
 
-Optionally, `macapp/install-autostart.sh` installs a LaunchAgent that runs
-the server headlessly at every login (`macapp/uninstall-autostart.sh`
-removes it) — the app window works fine with or without this, it just
-skips the cold-start delay when the LaunchAgent is already running. It
-looks up the installed app and the current user's Node.js at install
-time, so it's portable the same way the app itself is.
+Closing the window keeps the app and its menu-bar item running; choose
+**Quit Playlist Exporter** from the menu-bar menu or use Cmd+Q to exit.
+The **Notifications** tab lets you select which export, scan, and playlist
+events send macOS notifications. Grant notification permission from that tab.
+The **Release Notes** tab shows the maintained version history and timestamp
+of the most recent build.
+
+`macapp/install-autostart.sh` installs a LaunchAgent that starts the app in
+menu-bar-only mode at login (`macapp/uninstall-autostart.sh` removes it).
+The app stays in the menu bar without opening a window until you choose
+**Open Playlist Exporter**.
 
 **Distributing this to other people:** the app is only ad-hoc signed (see
 above — no Apple Developer account). Gatekeeper blocks ad-hoc-signed apps

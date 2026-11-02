@@ -1,9 +1,7 @@
-// Native window wrapper for the Playlist Exporter web UI. Starts the local
-// Node server if it isn't already running (idempotent — server.js exits
-// cleanly on EADDRINUSE, see server.js's "error" handler), then loads it into
-// a plain WKWebView with no browser chrome. If a LaunchAgent is already
-// keeping the server running in the background (optional autostart, see
-// macapp/install-autostart.sh), this is a no-op and the app just connects.
+// Native wrapper for the Playlist Exporter web UI. Starts the local Node server
+// if it isn't already running (idempotent — server.js exits cleanly on
+// EADDRINUSE), then loads it into a plain WKWebView with no browser chrome.
+// The optional login LaunchAgent starts this app in menu-bar-only mode.
 //
 // Fully relocatable/redistributable: nothing here points at this
 // developer's machine. The server's own source (server.js, src/, public/,
@@ -15,6 +13,7 @@
 // installed, and would be wiped on every update/reinstall anyway).
 import Cocoa
 import WebKit
+import UserNotifications
 
 let port = 4173
 let serverURL = URL(string: "http://localhost:\(port)/")!
@@ -25,6 +24,8 @@ let appSupportDir: URL = {
     try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
     return base
 }()
+
+let acoustidKeyFile = appSupportDir.appendingPathComponent("acoustid-api-key")
 
 let logDir: URL = {
     let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
@@ -79,14 +80,18 @@ func findNode() -> String? {
     return nil
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     var window: NSWindow!
     var webView: WKWebView!
+    var statusItem: NSStatusItem!
     var retryCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        let startsInBackground = CommandLine.arguments.contains("--background")
+        NSApp.setActivationPolicy(startsInBackground ? .accessory : .regular)
         buildMainMenu()
+        buildStatusItem()
+        UNUserNotificationCenter.current().delegate = self
         startServerIfNeeded()
 
         let frame = NSRect(x: 0, y: 0, width: 1280, height: 840)
@@ -101,19 +106,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         window.delegate = self
         window.isReleasedWhenClosed = false
 
-        webView = WKWebView(frame: frame)
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "pleNotifications")
+        configuration.userContentController.add(self, name: "pleRequestNotificationPermission")
+        configuration.userContentController.add(self, name: "pleSaveAcoustidKey")
+        webView = WKWebView(frame: frame, configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         window.contentView = webView
-        window.makeKeyAndOrderFront(nil)
 
-        NSApp.activate(ignoringOtherApps: true)
+        if !startsInBackground {
+            showMainWindow()
+        }
 
         loadServer()
     }
 
-    /** Fire-and-forget: if the server's already up (LaunchAgent or a
-     * previous launch of this app), the new process just exits(1) on
+    func buildStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = statusItem.button {
+            button.image = NSImage(systemSymbolName: "music.note.list", accessibilityDescription: "Playlist Exporter")
+            button.toolTip = "Playlist Exporter"
+        }
+        let menu = NSMenu()
+        let openItem = menu.addItem(withTitle: "Open Playlist Exporter", action: #selector(showMainWindowFromMenu), keyEquivalent: "")
+        openItem.target = self
+        menu.addItem(.separator())
+        let quitItem = menu.addItem(withTitle: "Quit Playlist Exporter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApp
+        statusItem.menu = menu
+    }
+
+    @objc func showMainWindowFromMenu() {
+        showMainWindow()
+    }
+
+    func showMainWindow() {
+        NSApp.setActivationPolicy(.regular)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /** Fire-and-forget: if the server is already up from a previous app
+     * instance, the new process just exits(1) on
      * EADDRINUSE and this is a harmless no-op. */
     func startServerIfNeeded() {
         guard let appDir = bundledAppDir() else {
@@ -140,10 +175,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         task.currentDirectoryURL = appDir
         let nodeDir = URL(fileURLWithPath: nodePath).deletingLastPathComponent().path
         task.environment = [
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:\(nodeDir)",
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\(nodeDir)",
             "PLE_NO_OPEN": "1",
             "PORT": String(port),
             "PLE_LIBRARY_DB": appSupportDir.appendingPathComponent("library.sqlite3").path,
+            "PLE_ACOUSTID_KEY_FILE": acoustidKeyFile.path,
         ]
 
         let logPath = logDir.appendingPathComponent("server.log").path
@@ -221,6 +257,81 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         NSApp.mainMenu = mainMenu
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "pleSaveAcoustidKey",
+           let key = message.body as? String {
+            let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let success = saveAcoustidKey(trimmedKey)
+            let detail = success
+                ? (trimmedKey.isEmpty ? "removed" : "saved")
+                : "failed"
+            DispatchQueue.main.async {
+                self.webView.evaluateJavaScript(
+                    "window.dispatchEvent(new CustomEvent('ple:acoustid-key-result', { detail: { success: \(success), status: '\(detail)' } }))"
+                )
+            }
+            if !success {
+                NSLog("Playlist Exporter couldn't save the local AcoustID key file")
+            }
+            return
+        }
+        guard let payload = message.body as? [String: Any] else { return }
+        if message.name == "pleRequestNotificationPermission" {
+            requestNotificationPermission()
+            return
+        }
+        guard message.name == "pleNotifications",
+              let title = payload["title"] as? String,
+              let body = payload["body"] as? String else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("Playlist Exporter couldn't deliver a macOS notification: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    func saveAcoustidKey(_ key: String) -> Bool {
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: appSupportDir.path)
+            if key.isEmpty {
+                if fileManager.fileExists(atPath: acoustidKeyFile.path) {
+                    try fileManager.removeItem(at: acoustidKeyFile)
+                }
+            } else {
+                try Data(key.utf8).write(to: acoustidKeyFile, options: .atomic)
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: acoustidKeyFile.path)
+            }
+            return true
+        } catch {
+            NSLog("Playlist Exporter couldn't save the local AcoustID key file: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error {
+                NSLog("Playlist Exporter notification permission request failed: %@", error.localizedDescription)
+            }
+            DispatchQueue.main.async {
+                let result = error == nil && granted ? "true" : "false"
+                self.webView.evaluateJavaScript(
+                    "window.dispatchEvent(new CustomEvent('ple:notification-permission', { detail: { granted: \(result) } }))"
+                )
+            }
+        }
+    }
+
     func loadServer() {
         webView.load(URLRequest(url: serverURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3))
     }
@@ -236,7 +347,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { retryLoad() }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { retryLoad() }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
+        return false
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        showMainWindow()
+        completionHandler()
+    }
 
     // WKWebView has no built-in UI for window.alert/confirm/prompt — without
     // a WKUIDelegate implementing these, the web UI's confirm() calls (e.g.

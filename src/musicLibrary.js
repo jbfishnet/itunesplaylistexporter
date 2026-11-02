@@ -113,6 +113,34 @@ end tell
     });
 }
 
+/** Pauses Music.app only when it is currently playing. */
+async function pausePlaybackIfPlaying() {
+  const isRunning = await new Promise((resolve, reject) => {
+    execFile("/usr/bin/pgrep", ["-x", "Music"], (err, stdout) => {
+      if (!err) {
+        resolve(Boolean(stdout.trim()));
+      } else if (err.code === 1) {
+        resolve(false);
+      } else {
+        reject(new Error(err.message));
+      }
+    });
+  });
+  if (!isRunning) return false;
+
+  const script = `
+tell application "Music"
+  if player state is playing then
+    pause
+    return "paused"
+  end if
+  return "not_playing"
+end tell
+`;
+  const raw = await runAppleScript(script);
+  return raw.trim() === "paused";
+}
+
 /**
  * Returns every track in a playlist, in playlist order, with the metadata
  * needed to decide whether it can be exported (location on disk + kind).
@@ -225,6 +253,41 @@ end tell
 }
 
 /**
+ * Adds a local file to the Music library unless it is already present, then
+ * verifies that Music.app can see it by its resolved file location.
+ */
+async function addFileToLibrary(filePath) {
+  const escapedPath = escapeAppleScriptString(filePath);
+  const countMatchingTracks = async () => {
+    const script = `
+tell application "Music"
+  set targetFile to (POSIX file "${escapedPath}" as alias)
+  set matchingTracks to (every track of library playlist 1 whose location is targetFile)
+  return count of matchingTracks as string
+end tell
+`;
+    const raw = await runAppleScript(script);
+    const count = parseInt(raw.trim(), 10);
+    if (!Number.isFinite(count)) throw new Error("Music.app returned an invalid library verification result");
+    return count;
+  };
+
+  const beforeCount = await countMatchingTracks();
+  if (beforeCount === 0) {
+    const addScript = `
+tell application "Music"
+  add (POSIX file "${escapedPath}") to library playlist 1
+end tell
+`;
+    await runAppleScript(addScript);
+  }
+
+  const afterCount = await countMatchingTracks();
+  if (afterCount === 0) throw new Error("Music.app did not confirm that the track was added to its library");
+  return { added: beforeCount === 0, alreadyPresent: beforeCount > 0, verified: true };
+}
+
+/**
  * Removes one specific entry from a playlist, addressed by the persistent
  * per-entry id captured in getPlaylistTracks (never by position — positions
  * shift as soon as any earlier entry is removed).
@@ -324,8 +387,10 @@ end tell
 
 module.exports = {
   listPlaylists,
+  pausePlaybackIfPlaying,
   getPlaylistTracks,
   addFileToPlaylist,
+  addFileToLibrary,
   removeTrackFromPlaylist,
   attemptDownload,
   createPlaylist,

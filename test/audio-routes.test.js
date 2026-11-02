@@ -42,6 +42,15 @@ test("GET /api/app-info reports the version from package.json, the single source
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.version, require("../package.json").version);
+  assert.equal(data.buildTime, null);
+});
+
+test("GET /api/release-notes exposes the maintained release history", async () => {
+  const res = await fetch(`${BASE_URL}/api/release-notes`);
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.releases[0].version, require("../package.json").version);
+  assert.ok(data.releases[0].changes.length > 0);
 });
 
 test("GET /api/audio serves a real audio file by absolute path", async () => {

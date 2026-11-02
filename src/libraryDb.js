@@ -167,6 +167,9 @@ function openLibraryDb(dbPath) {
     enrichmentBacklog: db.prepare(
       "SELECT id, path, title, artist, album, genre, year, extension, protected FROM files WHERE enrichment_status = 'pending' ORDER BY id ASC LIMIT ?"
     ),
+    requeueNotFoundById: db.prepare(
+      "UPDATE files SET enrichment_status = 'pending', updated_at = ? WHERE id = ? AND enrichment_status = 'not_found'"
+    ),
     markEnriched: db.prepare(`
       UPDATE files SET title = ?, artist = ?, album = ?, genre = ?, year = ?,
         enrichment_status = 'enriched', enriched_at = ?, updated_at = ? WHERE id = ?
@@ -403,8 +406,14 @@ function openLibraryDb(dbPath) {
    * used after an enrichment-matching improvement ships, so files that
    * failed under the old logic get a fresh attempt under the new one.
    * Returns how many rows were requeued. */
-  function requeueNotFound() {
+  function requeueNotFound(ids = null) {
     invalidateAggregateCaches();
+    if (Array.isArray(ids)) {
+      return [...new Set(ids)].reduce(
+        (count, id) => count + stmts.requeueNotFoundById.run(Date.now(), id).changes,
+        0
+      );
+    }
     return stmts.requeueNotFound.run(Date.now()).changes;
   }
 
